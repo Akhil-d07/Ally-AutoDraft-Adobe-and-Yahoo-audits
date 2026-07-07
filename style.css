@@ -1,0 +1,379 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #dde1e7;
+  --text: #1c2430;
+  --text-dim: #5b6472;
+  --accent: #2f5fdb;
+  --accent-dim: #e8edfc;
+  --ok: #1c8a4c;
+  --ok-bg: #e7f6ee;
+  --radius: 8px;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 100vh;
+}
+
+/* ---------- Header ---------- */
+.app-header {
+  background: #14181f;
+  color: #fff;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.app-header h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0;
+  text-align: center;
+}
+
+.app-header .subtitle {
+  font-size: 18.6px;
+  color: #fff;
+  margin-top: 2px;
+  text-align: center;
+}
+
+/* ---------- Mode tabs ---------- */
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 14px 0;
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 9px 16px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+  background: var(--accent-dim);
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  background: var(--bg);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--bg);
+  margin-bottom: -1px;
+}
+
+/* ---------- Main content ---------- */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.selector-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.selector-row label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+select, input[type="text"] {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--sans);
+}
+
+select:focus, input[type="text"]:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.count-badge {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.count-badge.status-error {
+  color: #b3261e;
+  font-weight: 600;
+}
+
+/* ---------- Field blocks ---------- */
+.field-block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.field-block .field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #fafbfc;
+  border-bottom: 1px solid var(--border);
+}
+
+.field-block .field-header span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.copy-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  background: var(--accent-dim);
+}
+
+.copy-btn.copied {
+  border-color: var(--ok);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.field-block textarea, .field-block .field-text {
+  width: 100%;
+  min-height: 70px;
+  border: none;
+  padding: 10px 12px;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  resize: vertical;
+  background: transparent;
+}
+
+.field-block textarea:focus { outline: none; }
+
+/* ---------- Template mode ---------- */
+.template-notice {
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--accent-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.template-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.template-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.template-field textarea,
+.template-field input[type="text"] {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--sans);
+  min-height: 56px;
+  resize: vertical;
+}
+
+.template-field input[type="text"] {
+  min-height: auto;
+}
+
+.template-actions {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.primary-btn {
+  appearance: none;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.primary-btn:hover { filter: brightness(1.08); }
+
+.template-output {
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  min-height: 120px;
+}
+
+.template-output-edit {
+  width: 100%;
+  min-height: 300px;
+  resize: vertical;
+  color: var(--text);
+}
+
+.empty-state {
+  color: var(--text-dim);
+  font-size: 13px;
+  padding: 24px 4px;
+  text-align: center;
+}
+
+/* ---------- Template tab controls (Upload Excel + Get Data) ---------- */
+.controls-panel {
+  margin-bottom: 16px;
+}
+
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+/* Upload button + stored-file info stacked beneath it */
+.upload-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.controls-row + .controls-row {
+  margin-top: 24px;
+}
+
+/* Unified action buttons: Get Data / Log Issue / Clear */
+.action-btn {
+  appearance: none;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.action-btn:hover { filter: brightness(1.08); }
+
+.upload-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  display: inline-block;
+}
+
+.upload-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.excel-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.excel-info:empty {
+  display: none;
+}
+
+.excel-info .remove-link {
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.excel-info .remove-link:hover {
+  text-decoration: underline;
+}
+
+/* Floating window fills whatever size chrome.windows.create gave it */
+html, body.floating-window {
+  height: 100%;
+}

@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "A11y AutoDraft - Adobe & Yahoo audits",
+  "version": "1.0.0",
+  "description": "Look up WCAG checkpoint results, automation issue text, and bug report templates without leaving the browser.",
+  "action": {
+    "default_title": "A11y AutoDraft - Adobe & Yahoo audits",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"]
+}
