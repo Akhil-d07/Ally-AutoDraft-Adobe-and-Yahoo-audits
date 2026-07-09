@@ -733,16 +733,16 @@ const APP_DATA = {
       "id": 3,
       "automation_title": "Certain ARIA roles must contain particular children",
       "modified_alternative": "ARIA roles does not contain required children roles",
-      "expected_results": "The above mentioned element(s) with [PLACEHOLDER ADD THE MISSING CHILD ROLE] is provided with required parent role.",
-      "actual_results": "The above mentioned element(s) with [PLACEHOLDER ADD THE MISSING CHILD ROLE] is missing required parent role.",
+      "expected_results": "The above-mentioned element(s) with [PLACEHOLDER – ADD THE CURRENT PARENT ROLE] is provided with the required [PLACEHOLDER – ADD THE MISSING CHILD ROLE].",
+      "actual_results": "The above-mentioned element(s) with [PLACEHOLDER – ADD THE CURRENT PARENT ROLE] is missing the required [PLACEHOLDER – ADD THE MISSING CHILD ROLE].",
       "recommendation_to_fix": "Ensure all ARIA roles have their required children elements, if any. \n\nResource Link: \nWAI-ARIA Specification - The Roles Model - https://www.w3.org/TR/wai-aria-1.1/#roles \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 4,
       "automation_title": "Certain ARIA roles must be contained by particular parents",
       "modified_alternative": "ARIA roles does not contain required parent roles",
-      "expected_results": "The above-mentioned element(s) with [PLACEHOLDER ADD THE MISSING PARENT ROLE] is provided with the required parent role.",
-      "actual_results": "The above-mentioned element(s) with [PLACEHOLDER ADD THE MISSING PARENT ROLE] is missing the required parent role.",
+      "expected_results": "The above-mentioned element(s) with [PLACEHOLDER – ADD THE CURRENT ROLE] is provided with the required [PLACEHOLDER – ADD THE MISSING PARENT ROLE].",
+      "actual_results": "The above-mentioned element(s) with [PLACEHOLDER – ADD THE CURRENT ROLE] is missing the required [PLACEHOLDER – ADD THE MISSING PARENT ROLE].",
       "recommendation_to_fix": "Ensure all ARIA roles are contained by their required parent element, if any. \n\nResource Link: \nWAI-ARIA Specification - The Roles Model - https://www.w3.org/TR/wai-aria-1.1/#roles \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
