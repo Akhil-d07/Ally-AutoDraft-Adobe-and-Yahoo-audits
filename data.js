@@ -715,227 +715,243 @@ const APP_DATA = {
   "AUTOMATION": [
     {
       "id": 1,
-      "automation_title": "1.1.1 a - [role=\"img\"] elements must have an alternative text",
+      "automation_title": "[role=\"img\"] elements must have an alternative text",
       "modified_alternative": "Text alternative for the active image missing",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "Text alternativeis provided the above mentioned active image(s).",
+      "actual_results": "Text alternative is missing for the above mentioned active image(s).",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:-\n\n1. Use the alt attribute on the <img> element to convey the destination, purpose, or function of the image.\n\n<a href=\"index.html\"><img src=\"ABCD-logo.png\" alt=\"ABCD Home\"></a>\n\n2. Use the aria-label attribute to convey the destination, purpose, or function of the image.\n\n<button class=\"infoicon\" aria-label=\"more information\"></button>\n\n<a href=\"javascript:alert('Warning!');\" aria-label=\"warning\">\n<svg focusable=\"false\">\n<use xlink:href=\"#warning\"></use>\n</svg>\n</a>\n\nResource Link: \nDeque University: https://dequeuniversity.com/class/images/alt-text/actionable-links-buttons\nW3C-WAI tutorial: https://www.w3.org/WAI/tutorials/images/"
     },
     {
       "id": 2,
-      "automation_title": "1.1.1 b - Images must have alternative text",
+      "automation_title": "Images must have alternative text",
       "modified_alternative": "Text alternative for the informative image is missing",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "Text alternative is provided for the above mentioned informative image(s).",
+      "actual_results": "Text alternative is missing for the above mentioned informative image(s).",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:- \n\n1. Use the alt attribute on the <img> element to convey the intent, purpose, or meaning of the image. \n\n<img src=\"sunset.jpg\" alt=\"The sun setting over the Pacific Ocean, with a silhouette of a flying seagull in the foreground\"> \n\n<img src=\"cat.svg\" alt=\"cat\" role=\"img\"> (role is optional, for backwards compatibility with Safari) \n\n2. Use aria-label and role=\"img\" to convey the intent, purpose, or meaning of the image. \n\n<p>Have a great day <span class=\"fonticon smiley\" role=\"img\" aria-label=\"Smiley face\"></span></p> \n\n<svg role=\"img\" aria-label=\"cat\"> \n\n3. Use CSS clipped text to provide screen reader accessible (non-visible) alternative text. \n\n<a href=\"https://www.facebook.com/dequesystems\" class=\"fb\"> \n<span class=\"sr-text\">Deque's Facebook page</span> \n</a> \n\n.sr-text { \nposition: absolute; \nclip: rect(1px, 1px, 1px, 1px); \n-webkit-clip-path: inset(50%) ; \nclip-path: inset(50%); \npadding: 0; \nborder: 0; \nheight: 1px; \nwidth: 1px; \nwhite-space: nowrap; \noverflow: hidden; \n} \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/images/alt-text/informative \nW3C-WAI tutorial: https://www.w3.org/WAI/tutorials/images/"
     },
     {
       "id": 3,
-      "automation_title": "1.3.1 a - Certain ARIA roles must contain particular children",
+      "automation_title": "Certain ARIA roles must contain particular children",
       "modified_alternative": "ARIA roles does not contain required children roles",
-      "expected_results": "The above specified table must not contain the role=\"presentation\" as direct child for the role=\"grid\"",
-      "actual_results": "The above specified table defined with role=\"grid\" and has a direct child element with role=\"presentation\", which is not permitted for a grid structure."
+      "expected_results": "The above mentioned element(s) with [PLACEHOLDER ADD THE MISSING CHILD ROLE] is provided with required parent role.",
+      "actual_results": "The above mentioned element(s) with [PLACEHOLDER ADD THE MISSING CHILD ROLE] is missing required parent role.",
+      "recommendation_to_fix": "Ensure all ARIA roles have their required children elements, if any. \n\nResource Link: \nWAI-ARIA Specification - The Roles Model - https://www.w3.org/TR/wai-aria-1.1/#roles \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 4,
-      "automation_title": "1.3.1 a - Certain ARIA roles must be contained by particular parents",
+      "automation_title": "Certain ARIA roles must be contained by particular parents",
       "modified_alternative": "ARIA roles does not contain required parent roles",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned element(s) with [PLACEHOLDER ADD THE MISSING PARENT ROLE] is provided with the required parent role.",
+      "actual_results": "The above-mentioned element(s) with [PLACEHOLDER ADD THE MISSING PARENT ROLE] is missing the required parent role.",
+      "recommendation_to_fix": "Ensure all ARIA roles are contained by their required parent element, if any. \n\nResource Link: \nWAI-ARIA Specification - The Roles Model - https://www.w3.org/TR/wai-aria-1.1/#roles \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 5,
-      "automation_title": "1.3.1 f - <li> elements must be contained in a <ul> or <ol>",
+      "automation_title": "<li> elements must be contained in a <ul> or <ol>",
       "modified_alternative": "The <li> list item elements are not contained in a <ul> or <ol>",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned <li> element(s) is contained within a <ul> or <ol> element.",
+      "actual_results": "The above-mentioned <li> element(s) is not contained within a <ul> or <ol> element.",
+      "recommendation_to_fix": "Fix this issue by correctly applying <ul>/<li> or <ol>/<li> markup. \n1. Unordered list: Wrap a series of list items (<li>) inside an unordered list element (<ul>). Unordered lists should be used when a set of items can be placed in any order. \n\n<ul> \n<li>Strawberries</li> \n<li>Papaya</li> \n<li>Mangos</li> \n<li>Kiwis</li> \n\u2026 \n</ul> \n\n2. Ordered list: Wrap a series of list items (<li>) inside an ordered list element (<ol>). Ordered lists should be used when the list items need to be placed in a specific order. \n\n<h3>How to boil an egg</h3> \n<ol> \n<li>Place eggs in a large saucepan.</li> \n<li>Cover them with cool water by 1 inch.</li> \n<li>Cover pan with a lid and bring water to a rolling boil over high heat.</li> \n<li>When the water has reached a boil, remove saucepan from the burner.</li> \n<li>Let eggs sit in water for 12 minutes.</li> \n</ol> \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/lists/semantic-markup \nW3C-WAI tutorial: https://www.w3.org/WAI/tutorials/page-structure/content/#lists"
     },
     {
       "id": 6,
-      "automation_title": "1.3.1 f - <ul> and <ol> must only directly contain <li>, <script> or <template> elements",
-      "modified_alternative": " <ul> and <ol> contains direct child other than <li>, <script> or <template> which are not allowed.",
-      "expected_results": "The <ul> element directly contains only valid child elements like <li>, <script>, or <template>.",
-      "actual_results": "The above mentioned List element has direct children that are not allowed: ........."
+      "automation_title": "<ul> and <ol> must only directly contain <li>, <script> or <template> elements",
+      "modified_alternative": "The <ul> and <ol> list markup elements directly contain <li>",
+      "expected_results": "The above-mentioned <ul> or <ol> element(s) contain only permitted direct child element(s).\n\n[PLACEHOLDER ADD THE VALID CHILD ELEMENT]",
+      "actual_results": "The above-mentioned <ul> or <ol> element(s) contains invalid direct child element(s).\n\n[PLACEHOLDER ADD THE INVALID CHILD ELEMENT]",
+      "recommendation_to_fix": "Fix this issue by ensuring that all ordered and unordered lists (defined by ul or ol elements) contain only <li>, <script> or <template> elements as direct children. \n\nResource Link: \nDeque University:https://dequeuniversity.com/class/semantic-structure/lists/semantic-markup"
     },
     {
       "id": 7,
-      "automation_title": "1.4.1 b - Links are not distinguishable without relying on color",
+      "automation_title": "Links are not distinguishable without relying on color",
       "modified_alternative": "Link contrast is not at least 3:1 with surrounding text",
-      "expected_results": "The above mentioned link should be conveyed using an additional visual indicator beyond just color to differentiate itself from the surrounding text, or at least have a 3:1 contrast between the link text and the surrounding text color.",
-      "actual_results": "Color alone is used to differentiate link text from the surrounding text. The contrast between the link text color and the surrounding text color is not at least 3:1.\n\nContrast details:"
+      "expected_results": "The above-mentioned link element(s) meets the required 3:1 contrast ratio against the surrounding text.",
+      "actual_results": "The above-mentioned link element(s) do not meet the required 3:1 contrast ratio against the surrounding text.\n\n[PLACEHOLDER ADD CONTRAST DETAILS]",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:-\n1. Leave the link text and body text contrast as-is, but add an additional indicator (e.g. underline, outline, etc.) to the link text when it is in its default state.\n2. Increase the contrast between the link text and the body text so that the ratio is at least 3.0 to 1.\n\nResource Link: \nDeque University: https://dequeuniversity.com/class/visual-design/color/distinguish-links-from-text\nWCAG Technique G183: Using a contrast ratio of 3:1 with surrounding text and providing additional visual cues on focus for links or controls where color alone is used to identify them: https://www.w3.org/TR/WCAG20-TECHS/G183.html"
     },
     {
       "id": 8,
-      "automation_title": "1.4.3 - Elements must meet minimum color contrast ratio thresholds",
+      "automation_title": "Elements must meet minimum color contrast ratio thresholds",
       "modified_alternative": "Text content lacks 4.5:1 contrast ratio",
-      "expected_results": "The above-mentioned element meets the required color contrast ratio of 4.5:1 with the background color.",
-      "actual_results": "The above-mentioned element lacks the required color contrast ratio of 4.5:1 with the background color. \n\nContrast Details"
+      "expected_results": "The above-mentioned text element(s) meets the required 4.5:1 color contrast ratio.",
+      "actual_results": "The above-mentioned text element(s) do not meet the required 4.5:1 color contrast ratio.\n\n[PLACEHOLDER ADD CONTRAST DETAILS]",
+      "recommendation_to_fix": "Fix this issue by adjusting the text and/or background to increase the contrast to at least 4.5 to 1. \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/visual-design/contrast/text-against-background"
     },
     {
       "id": 9,
-      "automation_title": "1.4.4 - Zooming and scaling must not be disabled",
-      "modified_alternative": "Zooming and scaling is disabled \n",
-      "expected_results": "",
-      "actual_results": ""
+      "automation_title": "Zooming and scaling must not be disabled",
+      "modified_alternative": "Zooming and scaling is disabled",
+      "expected_results": "Zooming and scaling are enabled on the above-mentioned page.",
+      "actual_results": "Zooming and scaling are disabled on the above-mentioned page.",
+      "recommendation_to_fix": "Fix the issue by ensuring the zooming and scaling functionality is not disabled."
     },
     {
       "id": 10,
-      "automation_title": "2.1.1 - Scrollable region must have keyboard access",
+      "automation_title": "Scrollable region must have keyboard access",
       "modified_alternative": "Scrollable region does not have keyboard access",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned scrollable region(s) is keyboard accessible.",
+      "actual_results": "The above-mentioned scrollable region(s) is not keyboard accessible.",
+      "recommendation_to_fix": "Fix this issue by ensuring the component can be used by the keyboard. This includes ensuring controls are:\n1. Focusable with a keyboard (i.e. can be reached using the Tab key or Arrow keys on a keyboard), and\n2. Operable with a keyboard (e.g. links are activated with the Enter key, buttons are activated with Enter and Spacebar, checkboxes are activated with Spacebar, dragging and swiping actions have a keyboard alternative, etc.)\n\nThe best way to do this is to use native HTML elements when HTML equivalents exist (e.g. anchor, button, select, text area, and input elements). When custom (non native HTML) controls have to be used, you must ensure they can be focused with a keyboard (often using tabindex=\"0\") and operated with a keyboard (using JavaScript event handlers). The ARIA Authoring Practices Guide provides information on expected keyboard interaction patterns for custom controls and widgets and working examples (see References below).\n\nResource Link: \nDeque University: https://dequeuniversity.com/class/input-methods/keyboard-input/functionality\nARIA Authoring Practices Guide Patterns: https://www.w3.org/WAI/ARIA/apg/patterns/"
     },
     {
       "id": 11,
-      "automation_title": "2.4.2 - Documents must have <title> element to aid in navigation \n",
+      "automation_title": "Documents must have <title> element to aid in navigation",
       "modified_alternative": "The page does not have a programmatic title",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned page is provided with a programmatic title.",
+      "actual_results": "The above-mentioned page is missing a programmatic title.",
+      "recommendation_to_fix": "Fix this issue by using the <title> element in the document <head> to provide an accurate, informative, and (preferably) unique page title.\n\n<html lang=\"en\">\n<head>\n<title>Products and Services</title>\n</head>\n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/page-title/every-page"
     },
     {
       "id": 12,
-      "automation_title": "2.5.8 - All touch targets must be 24px large, or leave sufficient space",
+      "automation_title": "All touch targets must be 24px large, or leave sufficient space",
       "modified_alternative": "Target does not meet minimum size or spacing",
-      "expected_results": "The target size of the mentioned elements has a sufficient target size of 24 X 24 CSS px.",
-      "actual_results": "The target size of the mentioned elements does not have a target size of at least 24 X 24 CSS px.\n\nCurrent target size:"
+      "expected_results": "The above-mentioned touch target element(s) meets the minimum size or spacing requirements.",
+      "actual_results": "The above-mentioned touch target element(s) does not meet the minimum size or spacing requirements.",
+      "recommendation_to_fix": "Fix this issue by doing at least ONE of the following:-\n\n1. Ensure that the control has a target size of at least 24 x 24 CSS px.\n\n2. Ensure that a 24 pixel diameter circle centered on the target does not touch another target nor a 24 pixel diameter circle placed on the center of any other adjacent targets that are less than 24 by 24 pixels\n\nResource Link: \nWCAG Understanding document: https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum"
     },
     {
       "id": 13,
-      "automation_title": "3.1.1 - <html> element must have a valid value for the lang attribute",
+      "automation_title": "<html> element must have a valid value for the lang attribute",
       "modified_alternative": "The lang attribute value is not valid",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned page is provided with a valid lang attribute value.",
+      "actual_results": "The above-mentioned page contains an invalid lang attribute value.",
+      "recommendation_to_fix": "Fix this issue by providing a correct and valid lang attribute value. \n\nIn the following example, the two-letter code \"en\" specifies English as the primary language of the document. <html lang=\"en\"> \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/language/primary-language"
     },
     {
       "id": 14,
-      "automation_title": "3.1.1 - <html> element must have a lang attribute",
-      "modified_alternative": "The lang attribute is not programmatically assigned to a page \n",
-      "expected_results": "",
-      "actual_results": ""
+      "automation_title": "<html> element must have a lang attribute",
+      "modified_alternative": "The lang attribute is not programmatically assigned to a page",
+      "expected_results": "The above-mentioned page is provided with a programmatically assigned lang attribute.",
+      "actual_results": "The above-mentioned page is missing a programmatically assigned lang attribute.",
+      "recommendation_to_fix": "Fix this issue by identifying the primary language of the document in the opening <html> element using the lang attribute. \n\nIn the following example, the two-letter code \"en\" specifies English as the primary language of the document. <html lang=\"en\"> \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/language/primary-language"
     },
     {
       "id": 15,
-      "automation_title": "3.1.2 - lang attribute must have a valid value",
+      "automation_title": "lang attribute must have a valid value",
       "modified_alternative": "Value of the lang attribute is not valid",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned element(s) is provided with a valid lang attribute value.\n\n[PLACEHOLDER ADD CORRECT LANG VALUE]",
+      "actual_results": "The above-mentioned element(s) contains an invalid lang attribute value.\n\n[PLACEHOLDER ADD INCORRECT LANG VALUE]",
+      "recommendation_to_fix": "Fix this issue by providing a valid lang value for the lang attribute. \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/language/parts"
     },
     {
       "id": 16,
-      "automation_title": "4.1.2 - Elements must only use supported ARIA attributes",
+      "automation_title": "Elements must only use supported ARIA attributes",
       "modified_alternative": "Element contains ARIA attributes not allowed for its role",
-      "expected_results": "All the elements must be provided with only the ARIA attributes that are allowed. Here role=\"meter progressbar\" is also not a valid role. It should be either \"meter\" or \"progressbar\".",
-      "actual_results": "The provided attributes are not allowed for the specified role=\"meter progressbar\" \n- aria-valuenow=\"25\", aria-valuemin=\"\", aria-valuemax=\"1\", aria-valuetext=\"25%\""
+      "expected_results": "The above-mentioned element(s) uses only supported ARIA attribute(s) for its role.\n\n[PLACEHOLDER ADD SUPPORTED ROLE]",
+      "actual_results": "The above-mentioned element(s) contains unsupported ARIA attribute(s) for its role.\n\n\n[PLACEHOLDER ADD UNSUPPORTED ROLE]",
+      "recommendation_to_fix": "Fix this issue by using the appropriate ARIA roles, states, and properties. \n\nResource Link:\n- https://www.w3.org/TR/wai-aria-1.1/ \n- https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 17,
-      "automation_title": "4.1.2 - ARIA commands must have an accessible name",
+      "automation_title": "ARIA commands must have an accessible name",
       "modified_alternative": "ARIA commands are missing an accessible name",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned ARIA command element(s) is provided with an accessible name.",
+      "actual_results": "The above-mentioned ARIA command element(s) is missing an accessible name.",
+      "recommendation_to_fix": "Fix this issue by using any of the following techniques:-\n1. Use the innertext of the <button> or role=\"button\" element\n\n<button>Apply now!</button>\n\n<button class=\"apply-btn\"><span class=\"sr-text\">Apply now!</span></button>\n\n2. Use a non-empty aria-label attribute on the <button> or role=\"button\" element.\n\n<button class=\"apply-btn\" aria-label=\"Apply now!\"></button>\n\n<span role=\"button\" class=\"apply-btn\" aria-label=\"Apply Now!\"></span> \n\nResource Link:\n- https://dequeuniversity.com/class/custom-widgets/concepts/name \n- https://www.w3.org/TR/wai-aria-1.1/#aria-label"
     },
     {
       "id": 18,
-      "automation_title": "4.1.2 - ARIA hidden element must not be focusable or contain focusable elements",
-      "modified_alternative": "The focusable element or contain focusable elements does not contain aria-hidden=\"true\" \n",
-      "expected_results": "",
-      "actual_results": ""
+      "automation_title": "ARIA hidden element must not be focusable or contain focusable elements",
+      "modified_alternative": "The focusable element or contain focusable elements does not contain aria-hidden=\"true\"",
+      "expected_results": "The above-mentioned aria-hidden=\"true\" element(s) does not contain focusable element(s).",
+      "actual_results": "The above-mentioned aria-hidden=\"true\" element(s) contains focusable element(s).",
+      "recommendation_to_fix": "Fix the issue by removing aria-hidden=\"true\" for the focusable and interactive controls.\n\nResource Link:\nWAI-ARIA Recommendation: https://www.w3.org/TR/wai-aria-1.1/\nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 19,
-      "automation_title": "4.1.2 - ARIA input fields must have an accessible name",
+      "automation_title": "ARIA input fields must have an accessible name",
       "modified_alternative": "ARIA input fields are missing an accessible name",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned ARIA input field element(s) is provided with an accessible name.",
+      "actual_results": "The above-mentioned ARIA input field element(s) is missing an accessible name.",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:-\n\n1. Explicit label: Under most circumstances, the best technique is to use the <label> element with the for attribute. The value of the for attribute is the id attribute value of the <input> element.\n\n<label for=\"fname\">First Name:</label> \n<input type=\"text\" name=\"fn\" id=\"fname\">\n\n2. Use an aria-label attribute or title attribute on the <input> to provide a label when there is no visible label.\n\n<input type=\"text\" aria-label=\"search\">\n<input type=\"submit\" value=\"Search\">\n\n3. Use an aria-labelledby attribute on the <input> to reference a visible label. The value of the aria-labelledby attribute is the id attribute value of the visible text label.\n\n<span id=\"nickname\">Nickname:</span>\n<input type=\"text\" aria-labelledby=\"nickname\">\n\nIMPORTANT: If using aria-labelledby to associate form fields and a table header cell, the table headers/labels must be in <span> elements inside the <th>. It is the <span> element and NOT the <th> element that should have the referenced id. If you place the id on the <th> element, some screen readers will not read the labels correctly when you tab through the form elements.\n\n4. Implicit label (explicit label method is strongly preferred): Wrap the form element within the <label> element.\n\n<label>First Name: <input type=\"text\" name=\"fn\"></label>\n\nResource Link: \nDeque University: https://dequeuniversity.com/class/forms/labels/semantic-labels\nW3C-WAI tutorial: https://www.w3.org/WAI/tutorials/forms/"
     },
     {
       "id": 20,
-      "automation_title": "4.1.2 - Elements must only use permitted ARIA attributes",
+      "automation_title": "Elements must only use permitted ARIA attributes",
       "modified_alternative": "Elements use the non-permitted ARIA attributes",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned element(s) uses only permitted ARIA attribute(s).\n\n[PLACEHOLDER ADD SUPPORTED ATTRIBUTE]",
+      "actual_results": "The above-mentioned element(s) contains non-permitted ARIA attribute(s).\n\n[PLACEHOLDER ADD SUPPORTED ATTRIBUTE]",
+      "recommendation_to_fix": "Fix this issue by using the appropriate ARIA roles, states, and properties. \n\nResource Link: \n- https://www.w3.org/TR/wai-aria-1.1/ \n- https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 21,
-      "automation_title": "4.1.2 - Required ARIA attributes must be provided",
+      "automation_title": "Required ARIA attributes must be provided",
       "modified_alternative": "Required ARIA attribute missing",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned element(s) is provided with all required ARIA attribute(s).",
+      "actual_results": "The above-mentioned element(s) is missing required ARIA attribute(s).",
+      "recommendation_to_fix": "Fix this issue by using the appropriate ARIA roles, states, and properties. \n\nResource Link: \nWAI-ARIA Recommendation: https://www.w3.org/TR/wai-aria-1.1/ \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 22,
-      "automation_title": "4.1.2 - ARIA roles used must conform to valid values",
+      "automation_title": "ARIA roles used must conform to valid values",
       "modified_alternative": "ARIA roles does not contain valid values",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned element(s) is provided with a valid ARIA role.\n\n[PLACEHOLDER ADD SUPPORTED ROLE]",
+      "actual_results": "The above-mentioned element(s) contains an invalid ARIA role.\n\n[PLACEHOLDER ADD UNSUPPORTED ROLE]",
+      "recommendation_to_fix": "How To Fix: \nFix this issue by using the appropriate ARIA roles, states, and properties. \n\nResource Link: \nWAI-ARIA Recommendation: https://www.w3.org/TR/wai-aria-1.1/ \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 23,
-      "automation_title": "4.1.2 - ARIA attributes must conform to valid values",
-      "modified_alternative": "ARIA attributes does not contain valid values \n",
-      "expected_results": "",
-      "actual_results": ""
+      "automation_title": "ARIA attributes must conform to valid values",
+      "modified_alternative": "ARIA attributes does not contain valid values",
+      "expected_results": "The above-mentioned ARIA attribute(s) is provided with a valid value.\n\n[PLACEHOLDER ADD SUPPORTED ATTRIBUTE VALUE]",
+      "actual_results": "The above-mentioned ARIA attribute(s) contains an invalid value.\n\n[PLACEHOLDER ADD UNSUPPORTED ATTRIBUTE VALUE]",
+      "recommendation_to_fix": "Fix the issue by ensuring the value inside each attribute is spelled correctly and corresponds to a valid value. \n\nFor example, aria-hidden=\"true\" would pass, but aria-hidden=\"rtue\" would fail, as would aria-hidden=\"pizza\". \n\nResource Link: \nWAI-ARIA Recommendation: https://www.w3.org/TR/wai-aria-1.1/ \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 24,
-      "automation_title": "4.1.2 - ARIA attributes must conform to valid names",
+      "automation_title": "ARIA attributes must conform to valid names",
       "modified_alternative": "ARIA attributes does not contain valid names",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned element(s) uses valid ARIA attribute name(s).",
+      "actual_results": "The above-mentioned element(s) contains invalid ARIA attribute name(s).",
+      "recommendation_to_fix": "Fix the issue by ensuring the value inside each attribute is spelt correctly and corresponds to a valid name.\n\nResource Link:\nWAI-ARIA Recommendation: https://www.w3.org/TR/wai-aria-1.1/\nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/"
     },
     {
       "id": 25,
-      "automation_title": "4.1.2 - Buttons must have discernible text",
-      "modified_alternative": "Button: Button does not have a name",
-      "expected_results": "The above mentioned controls should be provided with appropriate descriptive name.\n\nSuggested label:",
-      "actual_results": "The above mentioned controls are missing descriptive names."
+      "automation_title": "Buttons must have discernible text",
+      "modified_alternative": "Button does not have a name",
+      "expected_results": "The above-mentioned button element(s) is provided with an accessible name.",
+      "actual_results": "The above-mentioned button element(s) is missing an accessible name.",
+      "recommendation_to_fix": "Fix this issue by using any of the following techniques:- \n1. Use the innertext of the <button> or role=\"button\" element \n\n<button>Apply now!</button> \n\n<button class=\"apply-btn\"><span class=\"sr-text\">Apply now!</span></button> \n\n2. Use a non-empty aria-label attribute on the <button> or role=\"button\" element. \n\n<button class=\"apply-btn\" aria-label=\"Apply now!\"></button> \n\n<span role=\"button\" class=\"apply-btn\" aria-label=\"Apply Now!\"></span> \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/custom-widgets/concepts/name \nW3C ARIA Recommendation: https://www.w3.org/TR/wai-aria-1.1/#aria-label"
     },
     {
       "id": 26,
-      "automation_title": "4.1.2 - Frames must have an accessible name",
+      "automation_title": "Frames must have an accessible name",
       "modified_alternative": "Frames are missing an accessible name",
-      "expected_results": "Frames must have an accessible name",
-      "actual_results": "Frames do not have an accessible name"
+      "expected_results": "The above-mentioned frame element(s) is provided with an accessible name.",
+      "actual_results": "The above-mentioned frame element(s) is missing an accessible name.",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:- \n\n1. Use the title attribute. \n\n<iframe title=\"Video of touch screen for the blind in New York City taxis\" src=\"//www.youtube.com/embed/hM0x0k2Bv3Y\"></iframe> \n\n2. Use an aria-labelledby attribute which references the id attribute of visible text on the screen. \n\n<h3 id=\"ts-vid\">Video of touch screen for the blind in New York City taxis</h3> \n<iframe src=\"//www.youtube.com/embed/hM0x0k2Bv3Y\" aria-labelledby=\"ts-vid\"></iframe> \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/iframes/frame-titles"
     },
     {
       "id": 27,
-      "automation_title": "4.1.2 - Form elements must have labels",
-      "modified_alternative": "Form field: Form field is missing an accessible name",
-      "expected_results": "The edit fields must have an accessible name. It is suggested to associate the visible label text of the form control with the edit field.",
-      "actual_results": "The label is missing for the edit field."
+      "automation_title": "Form elements must have labels",
+      "modified_alternative": "Form field is missing an accessible name",
+      "expected_results": "The above-mentioned form field element(s) is provided with an accessible name.",
+      "actual_results": "The above-mentioned form field element(s) is missing an accessible name.",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:- \n\n1. Explicit label: Under most circumstances, the best technique is to use the <label> element with the for attribute. The value of the for attribute is the id attribute value of the <input> element. \n\n<label for=\"fname\">First Name:</label> \n<input type=\"text\" name=\"fn\" id=\"fname\"> \n\n2. Use an aria-label attribute or title attribute on the <input> to provide a label when there is no visible label. \n\n<input type=\"text\" aria-label=\"search\"> \n<input type=\"submit\" value=\"Search\"> \n\n3. Use an aria-labelledby attribute on the <input> to reference a visible label. The value of the aria-labelledby attribute is the id attribute value of the visible text label. \n\n<span id=\"nickname\">Nickname:</span> \n<input type=\"text\" aria-labelledby=\"nickname\"> \n\nIMPORTANT: If using aria-labelledby to associate form fields and a table header cell, the table headers/labels must be in <span> elements inside the <th>. It is the <span> element and NOT the <th> element that should have the referenced id. If you place the id on the <th> element, some screen readers will not read the labels correctly when you tab through the form elements. \n\n4. Implicit label (explicit label method is strongly preferred): Wrap the form element within the <label> element. \n\n<label>First Name: <input type=\"text\" name=\"fn\"></label> \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/forms/labels/semantic-labels \nW3C-WAI tutorial: https://www.w3.org/WAI/tutorials/forms/"
     },
     {
       "id": 28,
-      "automation_title": "4.1.2 - Links must have discernible text",
+      "automation_title": "Links must have discernible text",
       "modified_alternative": "Link does not have discernible link text",
-      "expected_results": "The above mentioned controls should be provided with appropriate descriptive name.\n\nSuggested label:",
-      "actual_results": "The above mentioned controls are missing descriptive names."
+      "expected_results": "The above-mentioned link element(s) is provided with discernible link text.",
+      "actual_results": "The above-mentioned link element(s) is missing discernible link text.",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:- \n\n1.Use link text contained between the opening <a> and closing </a> elements. Link text can be: visible text, CSS clipped text, or alternative text on an <img> element. \n\n<a href=\"https://dequeuniversity.com/contact/\">Contact Us</a> \n\n<a href=\"https://www.facebook.com/dequesystems/\" class=\"fbicon\"><span class=\"sr-text\">Deque's Facebook page</span></a> \n\n<a href=\"http://www.deque.com\"><img src=\"deque_logo.png\" alt=\"Deque Systems\"></a> \n\n2. Use an aria-label attribute or an aria-labelledby attribute to name a link. \n\n<a href=\"https://www.facebook.com/dequesystems/\" class=\"fbicon\" aria-label=\"Deque's Facebook page\"></a> \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/links/link-text"
     },
     {
       "id": 29,
-      "automation_title": "4.1.2 - Interactive controls must not be nested",
+      "automation_title": "Interactive controls must not be nested",
       "modified_alternative": "Interactive elements contain nested focusable elements",
-      "expected_results": "",
-      "actual_results": ""
+      "expected_results": "The above-mentioned interactive element(s) does not contain nested interactive element(s).",
+      "actual_results": "The above-mentioned interactive element(s) contains nested interactive element(s).",
+      "recommendation_to_fix": "Fix this issue by ensuring that button and link elements do not contain other button or link elements or any other interactive elements. \n\nResource Link: \nDeque University: https://dequeuniversity.com/class/semantic-structure/parsing-and-validity/ \nHTML5 spec: https://www.w3.org/TR/html52/sec-forms.html#the-button-element \nHTML5 spec: https://www.w3.org/TR/html52/textlevel-semantics.html#the-a-element"
     },
     {
       "id": 30,
-      "automation_title": "4.1.2 - Select element must have an accessible name",
+      "automation_title": "Select element must have an accessible name",
       "modified_alternative": "Select element does not have an accessible name",
-      "expected_results": "The above mentioned select control must have an accessible name.\nSuggested: Sort By",
-      "actual_results": "The above mentioned select control is missing an accessible name."
-    },
-    {
-      "id": 31,
-      "automation_title": "4.1.2 - ARIA progressbar nodes must have an accessible name",
-      "modified_alternative": "ARIA progressbar nodes does not have an accessible name",
-      "expected_results": "The progress bar nodes(loading indicator) MUST have an accessible name.",
-      "actual_results": "The accessible name is missing for the progress bar node."
-    },
-    {
-      "id": 32,
-      "automation_title": "TEST",
-      "modified_alternative": "TEST",
-      "expected_results": "Test",
-      "actual_results": "Test"
+      "expected_results": "The above-mentioned select element(s) is provided with an accessible name.",
+      "actual_results": "The above-mentioned select element(s) is missing an accessible name.",
+      "recommendation_to_fix": "Fix this issue by using ONE of the following techniques:- \n1. Use an HTML <select> element with <option> elements to create the drop-down menu. \n2. Use the ARIA combobox design pattern. View the full ARIA design pattern for a combobox including expected keyboard interactions and examples: https://www.w3.org/WAI/ARIA/apg/patterns/combobox/ \n\nResource Link: \nW3C HTML5 Recommendation: https://www.w3.org/TR/html5/sec-forms.html#the-select-element \nWAI-ARIA Authoring Practices: https://www.w3.org/WAI/ARIA/apg/patterns/combobox/"
     }
   ],
   "TEMPLATE_FIELDS": [
@@ -967,13 +983,13 @@ const APP_DATA = {
       "key": "tool",
       "label": "Testing Tool",
       "type": "text",
-      "default": "axe DevTools Chrome browser extension"
+      "default": "Chrome on Windows using axe DevTools Chrome browser extension"
     },
     {
       "key": "steps",
       "label": "Steps to Reproduce",
       "type": "textarea",
-      "default": "1. Open the URL mentioned above.\n2. Click on the (F12) the browser inspect panel appears.\n3. Run the Axe DevTools extension and observe the \"Description here\" issue for the following elements."
+      "default": "1. Open the URL mentioned above.\n2. Press F12 to open the browser Inspect panel.\n3. Run the Axe DevTools extension.\n4. Observe the \"Description here\" issue for the below-mentioned element(s)."
     },
     {
       "key": "expectedResults",

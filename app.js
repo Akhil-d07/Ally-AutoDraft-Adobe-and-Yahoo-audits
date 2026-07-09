@@ -155,10 +155,14 @@
   // form field keys. summary/impact/defaultSummaryFlag have no obvious home in
   // the Template fields, so they're extracted but intentionally left unmapped.
   // Expected/Actual Results are handled separately via findAutomationMatch().
+  // recommendation is deliberately NOT mapped here anymore — Remediation
+  // Recommendation now comes from the Automation sheet match's
+  // recommendation_to_fix column instead of the live page's #notes field
+  // (same reasoning as Expected/Actual Results: the sheet is the source of
+  // truth once reviewed, not whatever's currently typed on the page).
   const EXTRACTED_TO_TEMPLATE_MAP = {
     checkpoint: "wcagSc",
     sourceCode: "codeSnippet",
-    recommendation: "remediation",
     pageName: "screenName",
   };
 
@@ -609,11 +613,29 @@
 
   // ---------- Template mode ----------
 
-  // Pulls "- Element" bullet lines out of the Steps to Reproduce text (or the
-  // full preview, since bullets typed there match the same pattern).
+  // Narrows text down to just the Steps to Reproduce section (between the
+  // "Steps to reproduce:" header and the next "Expected results:"/"Actual
+  // results:" header) when those headers are present. If neither header is
+  // found — e.g. when called with just the isolated Steps field value, which
+  // has no headers of its own — the whole input is used as-is, so this stays
+  // backward compatible with that call site.
+  function scopeToStepsSection(text) {
+    const str = String(text || "");
+    const startMatch = str.match(/steps to reproduce:/i);
+    if (!startMatch) return str;
+
+    const afterStart = str.slice(startMatch.index + startMatch[0].length);
+    const endMatch = afterStart.match(/\n\s*(expected results|actual results):/i);
+    return endMatch ? afterStart.slice(0, endMatch.index) : afterStart;
+  }
+
+  // Pulls "- Element" bullet lines out of the Steps to Reproduce section only
+  // (see scopeToStepsSection) — deliberately NOT the whole text, since other
+  // sections like Remediation Recommendation can also contain "- " lines
+  // (e.g. resource link lists) that would otherwise be misread as elements.
   function extractElementsFromText(text) {
     const elements = [];
-    String(text || "")
+    scopeToStepsSection(text)
       .split("\n")
       .forEach((line) => {
         const m = line.match(/^\s*-\s*(.+)$/);
@@ -705,6 +727,7 @@
     { key: "labels", label: "Labels" },
     { key: "expectedResults", label: "Expected Results" },
     { key: "actualResults", label: "Actual Results" },
+    { key: "remediation", label: "Remediation Recommendation" },
   ];
 
   function findMissingRequiredFields(form) {
@@ -1142,9 +1165,11 @@
         const match = findAutomationMatch(pageData.summary);
         const expectedInput = form.querySelector('[data-key="expectedResults"]');
         const actualInput = form.querySelector('[data-key="actualResults"]');
+        const remediationInput = form.querySelector('[data-key="remediation"]');
         if (expectedInput) expectedInput.value = match ? match.expected_results || "" : "";
         if (actualInput) actualInput.value = match ? match.actual_results || "" : "";
-        if (match) applied.push("expectedResults", "actualResults");
+        if (remediationInput) remediationInput.value = match ? match.recommendation_to_fix || "" : "";
+        if (match) applied.push("expectedResults", "actualResults", "remediation");
 
         const { applied: referenceApplied, notes: referenceNotes } = await enrichFromReference(form, pageData);
         applied.push(...referenceApplied);
