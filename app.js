@@ -666,10 +666,10 @@
     return `${elements[0]}, ${elements[1]}......`;
   }
 
-  // Adobe: "Accessibility - <Modified title> - <Screen Name>"
-  // Yahoo:  "<Modified title> - <Screen Name>" (no "Accessibility - " prefix)
+  // Adobe: "[Accessibility] - <Modified title> - <Screen Name>"
+  // Yahoo:  "<Modified title> - <Screen Name>" (no "[Accessibility] - " prefix)
   function buildTitlePrefix(project, modifiedTitle, screenName) {
-    return project === "yahoo" ? `${modifiedTitle} - ${screenName}` : `Accessibility - ${modifiedTitle} - ${screenName}`;
+    return project === "yahoo" ? `${modifiedTitle} - ${screenName}` : `[Accessibility] - ${modifiedTitle} - ${screenName}`;
   }
 
   function getUpdatedTitleLabelText(project) {
