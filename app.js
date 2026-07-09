@@ -160,8 +160,12 @@
   // recommendation_to_fix column instead of the live page's #notes field
   // (same reasoning as Expected/Actual Results: the sheet is the source of
   // truth once reviewed, not whatever's currently typed on the page).
+  // checkpoint is also NOT mapped to wcagSc — the live Checkpoint dropdown
+  // shows Deque's internal granular numbering (e.g. "1.1.1.a Alternative
+  // Text (Active Images)"), not the official WCAG SC title. wcagSc is filled
+  // separately in enrichFromReference() using the WCAG-JIRA sheet row's Key
+  // column instead (e.g. "1.1.1 Non-text Content (Level A)").
   const EXTRACTED_TO_TEMPLATE_MAP = {
-    checkpoint: "wcagSc",
     sourceCode: "codeSnippet",
     pageName: "screenName",
   };
@@ -564,6 +568,17 @@
     if (labelLines.length && labelsInput) {
       labelsInput.value = labelLines.map((l, i) => `${i + 1}. ${l}`).join("\n");
       applied.push("labels");
+    }
+
+    // Applicable WCAG Success Criterion: the official SC title (e.g. "1.1.1
+    // Non-text Content (Level A)") — this is the WCAG-JIRA row's Key column,
+    // NOT the live Checkpoint dropdown's Deque-internal numbering/wording.
+    const wcagScInput = form.querySelector('[data-key="wcagSc"]');
+    if (wcagRow && wcagScInput) {
+      wcagScInput.value = wcagRow.key;
+      applied.push("wcagSc");
+    } else if (wcagScInput) {
+      notes.push(`wcagSc left blank \u2014 no WCAG-JIRA row for SC ${scCode || "(none found in Checkpoint text)"}`);
     }
 
     const osRow = lookupByKey(byType, "Context", "OS");
