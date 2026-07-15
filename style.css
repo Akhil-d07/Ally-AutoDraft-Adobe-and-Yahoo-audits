@@ -133,7 +133,8 @@ select:focus, input[type="text"]:focus, textarea:focus {
 }
 
 .count-badge {
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--text-dim);
   margin-top: 4px;
 }
@@ -141,6 +142,28 @@ select:focus, input[type="text"]:focus, textarea:focus {
 .count-badge.status-error {
   color: #b3261e;
   font-weight: 600;
+}
+
+.count-badge:empty {
+  display: none;
+}
+
+/* ---------- Grouped errors/status section (Summary Update tab) ---------- */
+.errors-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.errors-heading {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
 }
 
 /* ---------- Field blocks ---------- */

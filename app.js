@@ -644,6 +644,125 @@
     return endMatch ? afterStart.slice(0, endMatch.index) : afterStart;
   }
 
+  // Same boundary logic as scopeToStepsSection, but returns character offsets
+  // into the original text (content only, header excluded) so a corrected
+  // version can be spliced back in without disturbing anything else.
+  function locateStepsSection(text) {
+    const str = String(text || "");
+    const startMatch = str.match(/steps to reproduce:/i);
+    if (!startMatch) return null;
+    const sectionStart = startMatch.index + startMatch[0].length;
+    const afterHeader = str.slice(sectionStart);
+    const endMatch = afterHeader.match(/\n\s*(expected results|actual results):/i);
+    const sectionEnd = endMatch ? sectionStart + endMatch.index : str.length;
+    return { sectionStart, sectionEnd, content: str.slice(sectionStart, sectionEnd) };
+  }
+
+  // Pulls the leading step markers (e.g. "1", "2", but also malformed ones
+  // like "" for a blank/missing marker or "a"/"b" for stray letters) out of
+  // the Steps to Reproduce section, in the order they appear. Kept as raw
+  // strings (not parsed as integers) specifically so malformed markers show
+  // up as-is in the displayed sequence rather than silently vanishing.
+  function extractStepNumbers(text) {
+    const markers = [];
+    scopeToStepsSection(text)
+      .split("\n")
+      .forEach((line) => {
+        const m = line.match(/^\s*([a-zA-Z0-9]*)\s*\./);
+        if (m) markers.push(m[1]);
+      });
+    return markers;
+  }
+
+  // Checks that step markers form a clean 1,2,3,... sequence with no gaps,
+  // duplicates, blanks, or stray letters. Returns the actual sequence either
+  // way, for display (e.g. "1,2,3,4,4,5,6" for a duplicate, "1,2,3,5,6" for a
+  // gap, "1,2,,4,5,6" for a blank marker, "1,2,3,4,a,b,7,8" for stray letters).
+  function checkStepSequence(markers) {
+    for (let i = 0; i < markers.length; i++) {
+      if (markers[i] !== String(i + 1)) return { ok: false, markers };
+    }
+    return { ok: markers.length > 0, markers };
+  }
+
+  // Renumbers the Steps to Reproduce section sequentially (1, 2, 3, ...),
+  // fixing duplicates, gaps, blank markers, and stray letters alike, while
+  // leaving "- Element" bullet lines and everything outside Steps untouched.
+  function fixStepsNumberingInDetails(fullText) {
+    const loc = locateStepsSection(fullText);
+    if (!loc) return fullText;
+
+    let counter = 0;
+    const fixedContent = loc.content
+      .split("\n")
+      .map((line) => {
+        const m = line.match(/^(\s*)([a-zA-Z0-9]*)(\s*\.\s*)(.*)$/);
+        if (!m) return line;
+        counter += 1;
+        return `${m[1]}${counter}${m[3]}${m[4]}`;
+      })
+      .join("\n");
+
+    return fullText.slice(0, loc.sectionStart) + fixedContent + fullText.slice(loc.sectionEnd);
+  }
+
+  // Generic section locator: finds startRegex's header, returns offsets/content
+  // up to whichever endRegex in the list appears first (or end of text).
+  function locateSection(text, startRegex, endRegexList) {
+    const str = String(text || "");
+    const startMatch = str.match(startRegex);
+    if (!startMatch) return null;
+    const sectionStart = startMatch.index + startMatch[0].length;
+    const afterHeader = str.slice(sectionStart);
+    let endIdx = afterHeader.length;
+    endRegexList.forEach((re) => {
+      const m = afterHeader.match(re);
+      if (m && m.index < endIdx) endIdx = m.index;
+    });
+    const sectionEnd = sectionStart + endIdx;
+    return { sectionStart, sectionEnd, content: str.slice(sectionStart, sectionEnd) };
+  }
+
+  // The Remediation Recommendation section actually ends at "Resource Link:"
+  // / "Reference Link:" when either is present (falls back to "Screen Name:"
+  // for reports that don't have a Resource/Reference Link section at all).
+  function locateRemediationSection(text) {
+    return locateSection(text, /remediation recommendation:/i, [
+      /\n\s*(resource link|reference link):/i,
+      /\n\s*screen name:/i,
+    ]);
+  }
+
+  // Flags any line within Remediation Recommendation that ends with ":" and
+  // has nothing else on that same line (e.g. "...appropriate ARIA roles,
+  // states, and properties:") — a dangling colon usually means a value was
+  // left unfinished. Checked per-line, not just the section's last line,
+  // since an earlier line can be broken even if later lines have real content.
+  function checkRemediationTrailingColon(text) {
+    const loc = locateRemediationSection(text);
+    if (!loc) return { ok: true, sectionFound: false, badLines: [] };
+    const badLines = [];
+    loc.content.split("\n").forEach((line) => {
+      const trimmed = line.replace(/\s+$/, "");
+      if (trimmed && trimmed.endsWith(":")) badLines.push(trimmed);
+    });
+    return { ok: badLines.length === 0, sectionFound: true, badLines };
+  }
+
+  // Fixes every dangling trailing ":" line by turning it into ":-".
+  function fixRemediationTrailingColon(fullText) {
+    const loc = locateRemediationSection(fullText);
+    if (!loc) return fullText;
+    const fixedContent = loc.content
+      .split("\n")
+      .map((line) => {
+        const trimmed = line.replace(/\s+$/, "");
+        return trimmed && trimmed.endsWith(":") ? trimmed + "-" : line;
+      })
+      .join("\n");
+    return fullText.slice(0, loc.sectionStart) + fixedContent + fullText.slice(loc.sectionEnd);
+  }
+
   // Pulls "- Element" bullet lines out of the Steps to Reproduce section only
   // (see scopeToStepsSection) — deliberately NOT the whole text, since other
   // sections like Remediation Recommendation can also contain "- " lines
@@ -798,11 +917,94 @@
     });
   }
 
+  // Parses the "Context:" section out of an already-written Details block.
+  // Returns null if no "Context:" header is found at all. sectionStart/
+  // sectionEnd are character offsets into the original text (from the start
+  // of "Context:" up to but not including the next header), so the caller
+  // can splice a replacement back in without disturbing anything else.
+  function parseContextFromDetails(text) {
+    const str = String(text || "");
+    const startMatch = str.match(/context:/i);
+    if (!startMatch) return null;
+
+    const sectionStart = startMatch.index;
+    const afterHeader = str.slice(sectionStart + startMatch[0].length);
+    const endMatch = afterHeader.match(/\n\s*(steps to reproduce|expected results|actual results):/i);
+    const contentEnd = endMatch ? endMatch.index : afterHeader.length;
+    const sectionEnd = sectionStart + startMatch[0].length + contentEnd;
+
+    const lines = afterHeader
+      .slice(0, contentEnd)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length);
+
+    let platform = null;
+    let os = "";
+    let browser = "";
+    let tool = "";
+    let hasPlatformLabel = false;
+    let hasTestMethodLabel = false;
+
+    lines.forEach((line) => {
+      if (/^platform:/i.test(line)) {
+        platform = line.replace(/^platform:\s*/i, "").trim();
+        hasPlatformLabel = true;
+      } else if (/^operating system:/i.test(line)) {
+        os = line.replace(/^operating system:\s*/i, "").trim();
+      } else if (/^browser:/i.test(line)) {
+        browser = line.replace(/^browser:\s*/i, "").trim();
+      } else if (/^test method:/i.test(line)) {
+        tool = line.replace(/^test method:\s*/i, "").trim();
+        hasTestMethodLabel = true;
+      } else {
+        // Unlabeled line = the old-style bare tool description
+        // (e.g. "Chrome on Windows using axe DevTools Chrome browser extension").
+        tool = line;
+      }
+    });
+
+    return {
+      sectionStart,
+      sectionEnd,
+      platform,
+      os,
+      browser,
+      tool,
+      // Already has both labels -> someone (or this tool) already reformatted
+      // it for Yahoo; don't touch it again.
+      alreadyFormatted: hasPlatformLabel && hasTestMethodLabel,
+    };
+  }
+
+  // Builds just the Yahoo-format Context block text (no surrounding blank
+  // lines — spliceContextIntoDetails handles spacing when merging it back in).
+  function buildYahooContextBlock(parsed, platformValue) {
+    return [
+      "Context:",
+      `Platform: ${platformValue || ""}`,
+      `Operating System: ${parsed.os || ""}`,
+      `Browser: ${parsed.browser || ""}`,
+      `Test Method: ${parsed.tool || ""}`,
+    ].join("\n");
+  }
+
+  // Replaces the original Context section (using the offsets from
+  // parseContextFromDetails) with newContextBlock, normalizing to exactly
+  // one blank line before and after.
+  function spliceContextIntoDetails(fullText, parsed, newContextBlock) {
+    const before = fullText.slice(0, parsed.sectionStart).replace(/\s+$/, "");
+    const after = fullText.slice(parsed.sectionEnd).replace(/^\s+/, "");
+    return `${before}\n\n${newContextBlock}\n\n${after}`;
+  }
+
   function renderSummaryUpdateMode() {
     const isExtension = typeof chrome !== "undefined" && chrome.scripting && chrome.tabs;
     let lastExtracted = null; // { summary, pageField, details }
     let originalSummary = null; // captured once on first Get Data, reused on repeat clicks
     let summaryProject = "adobe"; // independent from the Automation Template tab's toggle
+    let lastParsedContext = null; // result of parseContextFromDetails(), refreshed each Get Data
+    let platformState = { value: "", locked: false }; // persisted via chrome.storage — sticky across issues
 
     const radioRow = document.createElement("div");
     radioRow.className = "controls-row";
@@ -812,9 +1014,63 @@
       (project) => {
         summaryProject = project;
         regenerate();
+        refreshContextPreview();
+        refreshUniversalChecks();
       }
     ).forEach((el) => radioRow.appendChild(el));
     els.content.appendChild(radioRow);
+
+    // ---- Platform field with lock icon (Yahoo only) ----
+    const platformRow = document.createElement("div");
+    platformRow.className = "controls-row";
+    platformRow.style.display = "none";
+
+    const platformLabel = document.createElement("label");
+    platformLabel.textContent = "Platform:";
+    platformLabel.style.fontSize = "12px";
+    platformLabel.style.fontWeight = "600";
+    platformLabel.style.color = "var(--text-dim)";
+    platformLabel.style.alignSelf = "center";
+
+    const platformInput = document.createElement("input");
+    platformInput.type = "text";
+    platformInput.style.flex = "1";
+    platformInput.style.minWidth = "160px";
+
+    const lockBtn = document.createElement("button");
+    lockBtn.className = "copy-btn";
+    lockBtn.type = "button";
+
+    platformRow.appendChild(platformLabel);
+    platformRow.appendChild(platformInput);
+    platformRow.appendChild(lockBtn);
+    els.content.appendChild(platformRow);
+
+    async function loadPlatformState() {
+      const stored = await storageGet("summaryUpdatePlatform");
+      platformState = stored || { value: "", locked: false };
+      applyPlatformStateToUi();
+    }
+
+    function applyPlatformStateToUi() {
+      platformInput.value = platformState.value || "";
+      platformInput.disabled = !!platformState.locked;
+      lockBtn.textContent = platformState.locked ? "\uD83D\uDD12 Locked" : "\uD83D\uDD13 Lock";
+    }
+
+    lockBtn.addEventListener("click", async () => {
+      if (platformState.locked) {
+        platformState.locked = false;
+      } else {
+        platformState.value = platformInput.value.trim();
+        platformState.locked = true;
+      }
+      await storageSet("summaryUpdatePlatform", platformState);
+      applyPlatformStateToUi();
+      refreshContextPreview();
+    });
+
+    loadPlatformState();
 
     const actionRow = document.createElement("div");
     actionRow.className = "controls-row";
@@ -832,34 +1088,259 @@
     actionRow.appendChild(clearBtn);
     els.content.appendChild(actionRow);
 
+    // All status/error displays grouped together right under Get Data/Clear:
+    // general status, Summary data mismatch, Page Name vs Screen Name, locked
+    // Platform vs Details' existing Platform value, Steps numbering sequence,
+    // and Remediation Recommendation.
+    const errorsSection = document.createElement("div");
+    errorsSection.className = "errors-section";
+
+    const errorsHeading = document.createElement("div");
+    errorsHeading.className = "errors-heading";
+    errorsHeading.textContent = "Status & Checks";
+    errorsSection.appendChild(errorsHeading);
+
     const statusMsg = document.createElement("div");
     statusMsg.className = "count-badge";
-    els.content.appendChild(statusMsg);
+    errorsSection.appendChild(statusMsg);
+
+    const summaryDataCheckMsg = document.createElement("div");
+    summaryDataCheckMsg.className = "count-badge";
+    errorsSection.appendChild(summaryDataCheckMsg);
 
     const pageCheckMsg = document.createElement("div");
     pageCheckMsg.className = "count-badge";
-    els.content.appendChild(pageCheckMsg);
+    errorsSection.appendChild(pageCheckMsg);
+
+    const stepsCheckMsg = document.createElement("div");
+    stepsCheckMsg.className = "count-badge";
+    errorsSection.appendChild(stepsCheckMsg);
+
+    const remediationCheckMsg = document.createElement("div");
+    remediationCheckMsg.className = "count-badge";
+    errorsSection.appendChild(remediationCheckMsg);
+
+    const platformCheckMsg = document.createElement("div");
+    platformCheckMsg.className = "count-badge";
+    platformCheckMsg.style.display = "none";
+    errorsSection.appendChild(platformCheckMsg);
+
+    els.content.appendChild(errorsSection);
 
     const resultBlock = buildFieldBlock("Updated Summary", "");
     els.content.appendChild(resultBlock);
     const resultTextarea = resultBlock.querySelector("textarea");
+
+    // ---- Context preview (Yahoo only) ----
+    const contextStatusMsg = document.createElement("div");
+    contextStatusMsg.className = "count-badge";
+    contextStatusMsg.style.display = "none";
+    els.content.appendChild(contextStatusMsg);
+
+    const contextBlock = buildFieldBlock("Context (Yahoo format)", "");
+    contextBlock.style.display = "none";
+    els.content.appendChild(contextBlock);
+    const contextTextarea = contextBlock.querySelector("textarea");
 
     const applyRow = document.createElement("div");
     applyRow.className = "controls-row";
     const applyBtn = document.createElement("button");
     applyBtn.className = "action-btn";
     applyBtn.type = "button";
-    applyBtn.textContent = "Update Summary";
+    applyBtn.textContent = "Update";
     applyRow.appendChild(applyBtn);
     els.content.appendChild(applyRow);
+
+    // If the live Summary already looks like it's in the expected wrapped
+    // format ("Accessibility - Title - Screen (Elements)" for Adobe, without
+    // the prefix for Yahoo), extracts its pieces. Returns null if it doesn't
+    // look wrapped at all (e.g. a plain freeform title never touched by this tool).
+    function parseWrappedSummary(summaryText) {
+      const str = String(summaryText || "").trim();
+      const m = str.match(/^(.*)\(([^()]*)\)\s*$/);
+      if (!m) return null;
+      const rest = m[1].trim();
+      const elementsRaw = m[2].trim();
+      const lastDash = rest.lastIndexOf(" - ");
+      if (lastDash === -1) return null;
+      const screenName = rest.slice(lastDash + 3).trim();
+      let modifiedTitle = rest.slice(0, lastDash).trim();
+      let hasAccessibilityPrefix = false;
+      if (/^\[?Accessibility\]?\s*-\s*/i.test(modifiedTitle)) {
+        hasAccessibilityPrefix = true;
+        modifiedTitle = modifiedTitle.replace(/^\[?Accessibility\]?\s*-\s*/i, "").trim();
+      }
+      return { modifiedTitle, screenName, elementsRaw, hasAccessibilityPrefix };
+    }
+
+    // Whether a parsed summary's prefix presence matches what the current
+    // project expects (Adobe -> has "Accessibility - ", Yahoo -> doesn't).
+    function wrappedFormatMatchesProject(wrapped, project) {
+      if (!wrapped) return false;
+      const expectsPrefix = project !== "yahoo";
+      return wrapped.hasAccessibilityPrefix === expectsPrefix;
+    }
 
     function regenerate() {
       if (!lastExtracted) return;
       const screenName = extractScreenNameFromDetails(lastExtracted.details);
       const elements = extractElementsFromText(lastExtracted.details);
-      const prefix = buildTitlePrefix(summaryProject, originalSummary || "", screenName);
-      resultTextarea.value = `${prefix} (${formatElementsSummary(elements)})`;
+      const expectedElementsSummary = formatElementsSummary(elements);
+
+      const wrapped = parseWrappedSummary(originalSummary);
+      let modifiedTitle;
+
+      if (wrapped && wrappedFormatMatchesProject(wrapped, summaryProject)) {
+        // Already in the correct wrapped format — reuse just the real title
+        // text so we don't nest another "Accessibility - ... - ..." wrapper
+        // around an already-wrapped summary (that would duplicate the Screen
+        // Name/Elements instead of correcting them).
+        modifiedTitle = wrapped.modifiedTitle;
+
+        const screenMismatch = wrapped.screenName.trim().toLowerCase() !== (screenName || "").trim().toLowerCase();
+        const elementsMismatch = wrapped.elementsRaw.trim() !== expectedElementsSummary.trim();
+
+        if (screenMismatch || elementsMismatch) {
+          const parts = [];
+          if (screenMismatch) parts.push(`Screen Name shows "${wrapped.screenName}" (expected "${screenName || ""}")`);
+          if (elementsMismatch) parts.push(`Elements show "${wrapped.elementsRaw}" (expected "${expectedElementsSummary}")`);
+          setStatus(
+            summaryDataCheckMsg,
+            `\u26D4 Summary already in the correct format but data is stale: ${parts.join("; ")}. Corrected below.`,
+            true
+          );
+        } else {
+          setStatus(summaryDataCheckMsg, "Summary format and data both correct.", false);
+        }
+      } else {
+        modifiedTitle = originalSummary || "";
+        setStatus(summaryDataCheckMsg, "", false);
+      }
+
+      const prefix = buildTitlePrefix(summaryProject, modifiedTitle, screenName);
+      resultTextarea.value = `${prefix} (${expectedElementsSummary})`;
       checkPageMismatch(lastExtracted.pageField, screenName);
+    }
+
+    // Shows/builds the Yahoo-only Platform field + Context preview, plus the
+    // Platform-mismatch check. Hidden entirely for Adobe — this part only
+    // applies to Yahoo.
+    function refreshContextPreview() {
+      const isYahoo = summaryProject === "yahoo";
+      platformRow.style.display = isYahoo ? "" : "none";
+      contextBlock.style.display = isYahoo ? "" : "none";
+      contextStatusMsg.style.display = isYahoo ? "" : "none";
+      platformCheckMsg.style.display = isYahoo ? "" : "none";
+      if (!isYahoo) return;
+
+      if (!lastExtracted) {
+        contextTextarea.value = "";
+        setStatus(contextStatusMsg, "Click Get Data to load the Context section.", false);
+        setStatus(platformCheckMsg, "", false);
+        lastParsedContext = null;
+        return;
+      }
+
+      const parsed = parseContextFromDetails(lastExtracted.details);
+      lastParsedContext = parsed;
+
+      if (!parsed) {
+        contextTextarea.value = "";
+        setStatus(contextStatusMsg, "No \"Context:\" section found in Details.", true);
+      } else if (parsed.alreadyFormatted) {
+        // Already has Platform + Test Method labels — leave its existing
+        // Platform value alone rather than overwriting with the locked one.
+        contextTextarea.value = buildYahooContextBlock(parsed, parsed.platform || "");
+        setStatus(contextStatusMsg, "Already provided in correct format.", false);
+      } else {
+        contextTextarea.value = buildYahooContextBlock(parsed, platformState.value);
+        setStatus(contextStatusMsg, "Context reformatted for Yahoo \u2014 review before clicking Update.", false);
+      }
+
+      checkPlatformMismatch(parsed);
+    }
+
+    // Steps-numbering and Remediation-colon checks apply to BOTH Adobe and
+    // Yahoo, unlike the Context/Platform stuff above which is Yahoo-only.
+    function refreshUniversalChecks() {
+      if (!lastExtracted) {
+        setStatus(stepsCheckMsg, "", false);
+        setStatus(remediationCheckMsg, "", false);
+        return;
+      }
+      checkStepsNumbering(lastExtracted.details);
+      checkRemediationColon(lastExtracted.details);
+    }
+
+    // Flags when Details already has a Platform value that differs from the
+    // locked Platform field — usually means one of the two is stale.
+    function checkPlatformMismatch(parsed) {
+      const existingPlatform = parsed && parsed.platform ? parsed.platform.trim() : "";
+      const lockedPlatform = (platformState.value || "").trim();
+      if (!existingPlatform || !lockedPlatform) {
+        setStatus(platformCheckMsg, "", false);
+        return;
+      }
+      if (existingPlatform.toLowerCase() !== lockedPlatform.toLowerCase()) {
+        setStatus(
+          platformCheckMsg,
+          `\u26D4 Platform different \u2014 locked value is "${lockedPlatform}" but Details already has "${existingPlatform}".`,
+          true
+        );
+      } else {
+        setStatus(platformCheckMsg, `Locked Platform matches Details ("${existingPlatform}").`, false);
+      }
+    }
+
+    // Flags a broken Steps to Reproduce numbering sequence and shows the
+    // actual numbers found (e.g. "1,2,3,4,4,5,6" or "1,2,3,5,6").
+    function checkStepsNumbering(detailsText) {
+      const numbers = extractStepNumbers(detailsText);
+      if (!numbers.length) {
+        setStatus(stepsCheckMsg, "", false);
+        return;
+      }
+      const result = checkStepSequence(numbers);
+      if (!result.ok) {
+        setStatus(
+          stepsCheckMsg,
+          `\u26D4 Steps numbering issue: ${numbers.join(",")} \u2014 will be corrected automatically when you click Update.`,
+          true
+        );
+      } else {
+        setStatus(stepsCheckMsg, `Steps numbering OK: ${numbers.join(",")}.`, false);
+      }
+    }
+
+    // Flags any dangling ":"-ending lines within Remediation Recommendation.
+    function checkRemediationColon(detailsText) {
+      const result = checkRemediationTrailingColon(detailsText);
+      if (!result.sectionFound) {
+        setStatus(remediationCheckMsg, "", false);
+        return;
+      }
+      if (!result.ok) {
+        const preview = result.badLines.map((l) => `"${l}"`).join(", ");
+        setStatus(
+          remediationCheckMsg,
+          `\u26D4 Remediation Recommendation has dangling ":" line(s): ${preview} \u2014 will be corrected to ":-" when you click Update.`,
+          true
+        );
+      } else {
+        setStatus(remediationCheckMsg, "Remediation Recommendation OK.", false);
+      }
+    }
+
+    // Reconstructs the full Details text with whatever's currently in the
+    // Context preview spliced in (respects manual edits to that field).
+    // Returns the original Details unchanged if there's no Yahoo Context
+    // section to work with.
+    function buildFinalDetailsText() {
+      if (summaryProject !== "yahoo" || !lastExtracted) {
+        return lastExtracted ? lastExtracted.details : "";
+      }
+      if (!lastParsedContext) return lastExtracted.details;
+      return spliceContextIntoDetails(lastExtracted.details, lastParsedContext, contextTextarea.value);
     }
 
     function checkPageMismatch(pageField, screenName) {
@@ -908,9 +1389,11 @@
         }
 
         regenerate();
+        refreshContextPreview();
+        refreshUniversalChecks();
         setStatus(
           statusMsg,
-          `Pulled Summary and parsed Details. Using original Summary: "${originalSummary}" (click Clear to re-capture from the page).`,
+          "Pulled Summary and parsed Details. (Click Clear to re-capture the Summary from the page.)",
           false
         );
       } catch (err) {
@@ -921,34 +1404,72 @@
     clearBtn.addEventListener("click", () => {
       lastExtracted = null;
       originalSummary = null;
+      lastParsedContext = null;
       resultTextarea.value = "";
+      contextTextarea.value = "";
       setStatus(statusMsg, "Cleared. Next Get Data will re-capture the Summary from the page.", false);
       setStatus(pageCheckMsg, "", false);
+      setStatus(contextStatusMsg, "", false);
+      setStatus(platformCheckMsg, "", false);
+      setStatus(stepsCheckMsg, "", false);
+      setStatus(remediationCheckMsg, "", false);
+      setStatus(summaryDataCheckMsg, "", false);
     });
 
     applyBtn.addEventListener("click", async () => {
       if (!isExtension) {
-        setStatus(statusMsg, "Update Summary writes into the active browser tab, which only the extension version can do.", true);
+        setStatus(statusMsg, "Update writes into the active browser tab, which only the extension version can do.", true);
         return;
       }
       if (!resultTextarea.value.trim()) {
         setStatus(statusMsg, "Nothing to apply \u2014 click Get Data first.", true);
         return;
       }
-      setStatus(statusMsg, "Updating summary\u2026", false);
+      setStatus(statusMsg, "Updating\u2026", false);
       try {
         const tab = await getTargetTab();
         if (!tab || !tab.id) throw new Error("No active browser tab found.");
+
+        // Yahoo starts from the Context-corrected Details; Adobe starts from
+        // the Details as originally pulled. Both then get the same Steps-
+        // numbering and Remediation-colon fixes applied on top.
+        let detailsToWrite =
+          summaryProject === "yahoo" ? buildFinalDetailsText() : lastExtracted ? lastExtracted.details : "";
+
+        const stepsBefore = extractStepNumbers(detailsToWrite).join(",");
+        detailsToWrite = fixStepsNumberingInDetails(detailsToWrite);
+        const stepsAfter = extractStepNumbers(detailsToWrite).join(",");
+        const stepsWereFixed = stepsBefore !== stepsAfter && stepsBefore !== "";
+
+        const remediationCheck = checkRemediationTrailingColon(detailsToWrite);
+        let remediationWasFixed = false;
+        if (remediationCheck.sectionFound && !remediationCheck.ok) {
+          detailsToWrite = fixRemediationTrailingColon(detailsToWrite);
+          remediationWasFixed = true;
+        }
+
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          func: summaryWriter,
-          args: [resultTextarea.value],
+          func: pageWriter,
+          args: [resultTextarea.value, detailsToWrite],
         });
         const result = results && results[0] ? results[0].result : null;
-        const ok = !!(result && result.summaryOk);
-        setStatus(statusMsg, ok ? "Summary updated on the page." : "Summary field (#summary) not found.", !ok);
+        const summaryOk = !!(result && result.summaryOk);
+        const detailsOk = !!(result && result.detailsOk);
+
+        const extras = [];
+        if (stepsWereFixed) extras.push(`Steps numbering corrected (${stepsBefore} \u2192 ${stepsAfter}).`);
+        if (remediationWasFixed) extras.push('Remediation Recommendation ":" corrected to ":-".');
+
+        setStatus(
+          statusMsg,
+          `${summaryOk ? "Summary updated" : "Summary field (#summary) not found"}. ${
+            detailsOk ? "Details updated." : "Details field (#details) not found."
+          }${extras.length ? " " + extras.join(" ") : ""}`,
+          !summaryOk || !detailsOk
+        );
       } catch (err) {
-        setStatus(statusMsg, "Error updating summary: " + err.message, true);
+        setStatus(statusMsg, "Error updating: " + err.message, true);
       }
     });
   }
