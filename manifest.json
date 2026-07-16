@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "A11y AutoDraft - Adobe & Yahoo audits v1.0.4",
-  "version": "1.0.4",
+  "name": "A11y AutoDraft - Adobe & Yahoo audits v1.0.5",
+  "version": "1.0.5",
   "description": "Look up WCAG checkpoint results, automation issue text, and bug report templates without leaving the browser.",
   "action": {
     "default_title": "A11y AutoDraft - Adobe & Yahoo audits",
