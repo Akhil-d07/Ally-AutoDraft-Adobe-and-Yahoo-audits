@@ -624,8 +624,8 @@ const APP_DATA = {
     {
       "id": 104,
       "checkpoint": "4.1.2.b - Role: The element's role is missing or incorrect",
-      "expected_results": "The screen reader does not announce the link role for the above-mentioned element.",
-      "actual_results": "The screen reader announces the link role for the above-mentioned element."
+      "expected_results": "The screen reader announces the link role for the above-mentioned element.",
+      "actual_results": "The screen reader does not announce the link role for the above-mentioned element."
     },
     {
       "id": 105,

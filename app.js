@@ -25,6 +25,9 @@
     });
 
     render();
+    ensureDeviceTypeLoaded().then((loaded) => {
+      if (loaded !== "Desktop Web") render();
+    });
   }
 
   // Pulls the value on the line right after a "Screen Name:" header out of an
@@ -421,7 +424,7 @@
   //   1. The file uploaded via the "Upload Excel" button (stored in chrome.storage
   //      as "automationExcel") — this is what gets used if present, so re-uploading
   //      a changed file and clicking Get Data picks it up immediately.
-  //   2. The bundled extension/reference-data.xlsx, as a fallback if nothing's
+  //   2. The bundled referencedata.xlsx, as a fallback if nothing's
   //      been uploaded yet.
   //
   // Sheet columns: Type | Key | Label | Info1 | Info2. Rows are grouped by Type.
@@ -473,14 +476,14 @@
             referenceLoadError = "chrome.runtime unavailable (not running as an extension)";
             return null;
           }
-          const url = chrome.runtime.getURL("reference-data.xlsx");
+          const url = chrome.runtime.getURL("referencedata.xlsx");
           const resp = await fetch(url);
           if (!resp.ok) {
-            referenceLoadError = `reference-data.xlsx not found (HTTP ${resp.status}) \u2014 check it's at extension/reference-data.xlsx`;
+            referenceLoadError = `referencedata.xlsx not found (HTTP ${resp.status}) \u2014 check it's bundled at the extension root`;
             return null;
           }
           buf = await resp.arrayBuffer();
-          source = "bundled reference-data.xlsx";
+          source = "bundled referencedata.xlsx";
         }
 
         const workbook = XLSX.read(buf, { type: "array" });
@@ -626,6 +629,132 @@
     return { applied, notes };
   }
 
+  // ---------- Device Type / Native app context helpers ----------
+  //
+  // Device Type is a shared selection (persisted via chrome.storage) shown on
+  // both the Automation Template tab and the Summary Update tab. It filters
+  // which report format is needed:
+  //   Desktop Web / Android Web / iOS Web -> existing Web-audit behavior
+  //   Android Native / iOS Native          -> no automation exists; Environment/
+  //                                           Context comes from a manually
+  //                                           filled + locked "Native App
+  //                                           Context" block instead of the
+  //                                           Excel-driven Platform URL/OS/Browser
+  //                                           fields.
+
+  const DEVICE_TYPES = ["Desktop Web", "Android Web", "iOS Web", "Android Native", "iOS Native"];
+  const NATIVE_DEVICE_TYPES = ["Android Native", "iOS Native"];
+
+  function isNativeDeviceType(deviceType) {
+    return NATIVE_DEVICE_TYPES.indexOf(deviceType) !== -1;
+  }
+
+  let currentDeviceType = "Desktop Web";
+  let deviceTypeLoaded = false;
+
+  async function ensureDeviceTypeLoaded() {
+    if (deviceTypeLoaded) return currentDeviceType;
+    const stored = await storageGet("deviceTypeSelection");
+    if (stored && DEVICE_TYPES.indexOf(stored) !== -1) currentDeviceType = stored;
+    deviceTypeLoaded = true;
+    return currentDeviceType;
+  }
+
+  function setDeviceType(value) {
+    currentDeviceType = value;
+    storageSet("deviceTypeSelection", value);
+  }
+
+  // Builds the shared "Device Type:" selector row used by both the Automation
+  // Template tab and the Summary Update tab — label and dropdown sit on a
+  // single line rather than stacked.
+  function buildDeviceTypeRow(onChange) {
+    const row = document.createElement("div");
+    row.className = "inline-row";
+
+    const label = document.createElement("label");
+    label.textContent = "Device Type:";
+    label.setAttribute("for", "device-type-select");
+
+    const select = document.createElement("select");
+    select.id = "device-type-select";
+    select.className = "inline-select";
+    DEVICE_TYPES.forEach((dt) => {
+      const opt = document.createElement("option");
+      opt.value = dt;
+      opt.textContent = dt;
+      if (dt === currentDeviceType) opt.selected = true;
+      select.appendChild(opt);
+    });
+
+    select.addEventListener("change", () => {
+      setDeviceType(select.value);
+      onChange(select.value);
+    });
+
+    row.appendChild(label);
+    row.appendChild(select);
+    return row;
+  }
+
+  // Storage key for a Native App Context lock, kept separate per Device Type
+  // (Android Native vs iOS Native have different devices/app versions/etc.).
+  function nativeContextStorageKeyFor(deviceType) {
+    return `nativeContext:${deviceType}`;
+  }
+
+  // Locates the combined "Environment:" ... "Context:" region of Details, up
+  // to (but excluding) "Steps to reproduce:". Web and Native reports both keep
+  // Environment+Context contiguous, so one section covers both headers.
+  function locateEnvironmentContextSection(text) {
+    const str = String(text || "");
+    const startMatch = str.match(/environment:/i);
+    if (!startMatch) return null;
+    const sectionStart = startMatch.index;
+    const afterHeader = str.slice(sectionStart);
+    const endMatch = afterHeader.match(/\n\s*steps to reproduce:/i);
+    const sectionEnd = endMatch ? sectionStart + endMatch.index : str.length;
+    return { sectionStart, sectionEnd, content: str.slice(sectionStart, sectionEnd) };
+  }
+
+  // Builds the Environment/Context block for Native app testing (iOS/Android),
+  // used in place of the Platform URL / OS / Browser fields that only apply
+  // to Web audits. Same shape for both Adobe and Yahoo projects.
+  function buildNativeEnvironmentContextBlock(fields) {
+    const f = fields || {};
+    return [
+      "Environment:",
+      `Testing Application: ${f.testingApplication || ""}`,
+      `Authentication State: ${f.authState || ""}`,
+      "",
+      "Context:",
+      `Device: ${f.device || ""}`,
+      `Operating System: ${f.os || ""}`,
+      `${f.os || "OS"} Version: ${f.osVersion || ""}`,
+      `${f.testingApplication || "Application"} Version: ${f.appVersion || ""}`,
+      `${f.toolDescription || ""}`,
+    ].join("\n");
+  }
+
+  // Replaces the Environment+Context region (using offsets from
+  // locateEnvironmentContextSection) with newBlock, normalizing spacing.
+  function spliceEnvironmentContextIntoDetails(fullText, loc, newBlock) {
+    const before = fullText.slice(0, loc.sectionStart).replace(/\s+$/, "");
+    const after = fullText.slice(loc.sectionEnd).replace(/^\s+/, "");
+    const prefix = before ? before + "\n\n" : "";
+    return `${prefix}${newBlock}\n\n${after}`;
+  }
+
+  // Auto-fix applied on Update/Log Issue: within the Steps to Reproduce
+  // section only, turns 'quoted text' into "quoted text" (single quotes used
+  // where double quotes were intended).
+  function fixSingleQuotesInSteps(fullText) {
+    const loc = locateStepsSection(fullText);
+    if (!loc) return fullText;
+    const fixedContent = loc.content.replace(/'([^'\n]+)'/g, '"$1"');
+    return fullText.slice(0, loc.sectionStart) + fixedContent + fullText.slice(loc.sectionEnd);
+  }
+
   // ---------- Template mode ----------
 
   // Narrows text down to just the Steps to Reproduce section (between the
@@ -685,14 +814,17 @@
     return { ok: markers.length > 0, markers };
   }
 
-  // Renumbers the Steps to Reproduce section sequentially (1, 2, 3, ...),
-  // fixing duplicates, gaps, blank markers, and stray letters alike, while
-  // leaving "- Element" bullet lines and everything outside Steps untouched.
-  function fixStepsNumberingInDetails(fullText) {
+  // Renumbers the Steps to Reproduce section sequentially starting at
+  // startAt (default 1), fixing duplicates, gaps, blank markers, and stray
+  // letters alike, while leaving "- Element" bullet lines and everything
+  // outside Steps untouched. Used with startAt=2 when Step 1 doesn't open the
+  // URL — see checkStepOneOpensUrl — so the existing steps shift down and
+  // leave slot 1 free for the user to add the missing "Open the URL..." step.
+  function fixStepsNumberingInDetails(fullText, startAt) {
     const loc = locateStepsSection(fullText);
     if (!loc) return fullText;
 
-    let counter = 0;
+    let counter = (startAt || 1) - 1;
     const fixedContent = loc.content
       .split("\n")
       .map((line) => {
@@ -783,6 +915,765 @@
     if (!elements.length) return "Issue elements";
     if (elements.length <= 2) return elements.join(", ");
     return `${elements[0]}, ${elements[1]}......`;
+  }
+
+  // If a Summary already looks like it's in the expected wrapped format
+  // ("Accessibility - Title - Screen (Elements)" for Adobe, without the
+  // prefix for Yahoo), extracts its pieces. Returns null if it doesn't look
+  // wrapped at all (e.g. a plain freeform title never touched by this tool).
+  // Hoisted to top level so both the Summary Update tab and the Sanity engine
+  // can use it.
+  function parseWrappedSummary(summaryText) {
+    const str = String(summaryText || "").trim();
+    const m = str.match(/^(.*)\(([^()]*)\)\s*$/);
+    if (!m) return null;
+    const rest = m[1].trim();
+    const elementsRaw = m[2].trim();
+    const lastDash = rest.lastIndexOf(" - ");
+    if (lastDash === -1) return null;
+    const screenName = rest.slice(lastDash + 3).trim();
+    let modifiedTitle = rest.slice(0, lastDash).trim();
+    let hasAccessibilityPrefix = false;
+    if (/^\[?Accessibility\]?\s*-\s*/i.test(modifiedTitle)) {
+      hasAccessibilityPrefix = true;
+      modifiedTitle = modifiedTitle.replace(/^\[?Accessibility\]?\s*-\s*/i, "").trim();
+    }
+    return { modifiedTitle, screenName, elementsRaw, hasAccessibilityPrefix };
+  }
+
+  // Whether a parsed summary's prefix presence matches what the current
+  // project expects (Adobe -> has "Accessibility - ", Yahoo -> doesn't).
+  function wrappedFormatMatchesProject(wrapped, project) {
+    if (!wrapped) return false;
+    const expectsPrefix = project !== "yahoo";
+    return wrapped.hasAccessibilityPrefix === expectsPrefix;
+  }
+
+  // ---------- Sanity engine ----------
+  //
+  // Runs once, ~1 second after Update/Log Issue writes to the live page (the
+  // delay gives the page's own state a moment to settle before we read
+  // anything back off it, e.g. the screenshot upload widget or the Impact
+  // select). All checks that can be derived purely from the Summary/Details
+  // text we just wrote are pure functions below; the two that need the live
+  // page (screenshot presence, Impact value, Checkpoint value) are read via
+  // sanityPageExtractor(), injected the same way as the other page readers.
+
+  // Injected into the auditor page. Self-contained — no outer-scope refs.
+  function sanityPageExtractor() {
+    function getVal(selector) {
+      const el = document.querySelector(selector);
+      if (!el) return "";
+      if (el.tagName === "SELECT") {
+        if (el.selectedIndex >= 0 && el.options[el.selectedIndex]) {
+          return (el.options[el.selectedIndex].text || "").trim();
+        }
+        return (el.value || "").trim();
+      }
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return (el.value || "").trim();
+      return (el.textContent || "").trim();
+    }
+
+    // The attachment area lives at #issue-more-info > fieldset > div:nth-child(6)
+    // (labeled "Attachments" on the page) — it's not a drag/drop widget, so
+    // detection is based on whether that container has any actual attachment
+    // entries (thumbnails, file links/list items) versus being empty.
+    function detectScreenshot() {
+      const el = document.querySelector("#issue-more-info > fieldset > div:nth-child(6)");
+      if (!el) return { found: false, hasScreenshot: false };
+      const text = (el.textContent || "").trim();
+      // Explicit "no attachments" text is authoritative and overrides entry
+      // counting below — an Add/Upload control inside this fieldset would
+      // otherwise match the entries selector even when nothing is attached.
+      const explicitlyEmpty = /no attachments?( exist)?\.?|no files?( are)? (attached|uploaded)|none attached/i.test(text);
+      if (explicitlyEmpty) return { found: true, hasScreenshot: false };
+      const entries = el.querySelectorAll("img, li, [class*='attachment-item'], [class*='file-item'], [class*='thumbnail']");
+      return { found: true, hasScreenshot: entries.length > 0 };
+    }
+
+    const shot = detectScreenshot();
+    return {
+      severity: getVal("#severity-select"),
+      checkpoint: getVal("#combobox"),
+      screenshotFound: shot.found,
+      hasScreenshot: shot.hasScreenshot,
+    };
+  }
+
+  // Extracts the raw value after "Authentication State:" (same line, per the
+  // templates). Returns null if the header isn't found at all, "" if found
+  // but empty, otherwise the cleaned value — the caller decides what counts
+  // as valid.
+  function extractAuthenticationState(detailsText) {
+    const m = String(detailsText || "").match(/authentication\s*state\s*:\s*(.*)/i);
+    if (!m) return null;
+    // Strip non-breaking spaces and other invisible whitespace that can slip
+    // in via copy/paste and would otherwise defeat a plain .trim() check.
+    return m[1].replace(/[\u00A0\u200B\uFEFF]/g, " ").trim();
+  }
+
+  // Authentication State must be exactly "Logged In" or "Logged Out"
+  // (case-insensitive) — flag if absent or any other value.
+  function checkAuthenticationState(detailsText) {
+    const raw = extractAuthenticationState(detailsText);
+    if (raw === null) {
+      return {
+        ok: false,
+        detail: 'No "Authentication State:" line found.',
+        suggestedText: 'Authentication State: "Logged In" or "Logged Out"',
+      };
+    }
+    const norm = raw.toLowerCase();
+    if (norm === "logged in" || norm === "logged out") {
+      return { ok: true, detail: "" };
+    }
+    return {
+      ok: false,
+      detail: raw
+        ? `Authentication State is "${raw}" \u2014 must be "Logged In" or "Logged Out".`
+        : "Authentication State line is empty.",
+      // No deterministic single correct value here (either state could be the
+      // real one), so this is informational only — no auto-"fix" offered.
+      suggestedText: 'Authentication State: "Logged In" or "Logged Out"',
+    };
+  }
+
+  // Determines Screen Reader / Keyboard / Other from the Context section's
+  // tool line. Shared by the consistency check below and by the auto-insert
+  // logic that fills in a missing Step 1.
+  function determineIssueTypeFromContext(detailsText) {
+    const parsedContext = parseContextFromDetails(detailsText);
+    const blob = (parsedContext && parsedContext.tool ? parsedContext.tool : "").toLowerCase();
+    if (/nvda|screen reader|assistive technology/.test(blob)) return "Screen Reader";
+    if (/keyboard/.test(blob)) return "Keyboard";
+    return "Other";
+  }
+
+  // Checks Step 1 of Steps to Reproduce for consistency with the issue type
+  // determined from Context.
+  function checkStepsIssueTypeConsistency(detailsText) {
+    const issueType = determineIssueTypeFromContext(detailsText);
+
+    const stepLines = scopeToStepsSection(detailsText)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^[a-zA-Z0-9]*\s*\./.test(l));
+    const firstStepText = stepLines.length ? stepLines[0].replace(/^[a-zA-Z0-9]*\s*\.\s*/, "").trim() : "";
+    const mentionsTurnOnScreenReader = /turn\s+on\s+(the\s+)?screen\s*reader/i.test(firstStepText);
+
+    if (issueType === "Screen Reader") {
+      return {
+        ok: mentionsTurnOnScreenReader,
+        detail: mentionsTurnOnScreenReader
+          ? ""
+          : `Context indicates Screen Reader testing, but Step 1 ("${firstStepText || "(empty)"}") doesn't mention turning on the screen reader.`,
+      };
+    }
+    return {
+      ok: !mentionsTurnOnScreenReader,
+      detail: !mentionsTurnOnScreenReader
+        ? ""
+        : `Context indicates ${issueType} testing, but Step 1 mentions turning on the screen reader.`,
+    };
+  }
+
+  // Step 1 of Steps to Reproduce must convey opening the URL referenced
+  // above (e.g. "Open the above-mentioned URL", "Open the URL mentioned
+  // above") — semantic equivalents are fine, exact wording isn't required.
+  // Flag only if Step 1 conveys something else entirely with no reference to
+  // opening the URL (e.g. "Turn on the screen reader", "Navigate to the page").
+  function checkStepOneOpensUrl(detailsText) {
+    const stepLines = scopeToStepsSection(detailsText)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^[a-zA-Z0-9]*\s*\./.test(l));
+    const firstStepText = stepLines.length ? stepLines[0].replace(/^[a-zA-Z0-9]*\s*\.\s*/, "").trim() : "";
+
+    const mentionsUrl = /\burl\b/i.test(firstStepText);
+    const mentionsOpenVerb = /\b(open|navigate|go\s+to|launch|access)\b/i.test(firstStepText);
+    const ok = mentionsUrl && mentionsOpenVerb;
+
+    return {
+      ok,
+      detail: ok ? "" : `Step 1 ("${firstStepText || "(empty)"}") doesn't convey opening the URL referenced above.`,
+    };
+  }
+
+  // The Step 1 text to auto-insert when it's missing, tailored to issue type:
+  // Screen Reader issues need both actions (open the URL AND turn on the
+  // screen reader) in Step 1 to satisfy both checks above; Keyboard/Other
+  // issues just need the URL opened.
+  function buildDefaultStepOneText(issueType) {
+    if (issueType === "Screen Reader") {
+      return "Turn on the screen reader and open the URL mentioned above.";
+    }
+    return "Open the URL mentioned above.";
+  }
+
+  // If Step 1 doesn't open the URL (per checkStepOneOpensUrl), inserts a new
+  // "1. ..." line — worded per the issue type from Context — ahead of the
+  // existing steps. Caller is expected to renumber afterward (fixStepsNumberingInDetails)
+  // since this just prepends "1." and leaves the old lines' markers as-is.
+  function autoInsertStepOneIfMissing(fullText) {
+    const check = checkStepOneOpensUrl(fullText);
+    if (check.ok) return { changed: false, text: fullText, issueType: null, stepText: null };
+
+    const loc = locateStepsSection(fullText);
+    if (!loc) return { changed: false, text: fullText, issueType: null, stepText: null };
+
+    const issueType = determineIssueTypeFromContext(fullText);
+    const stepText = buildDefaultStepOneText(issueType);
+    const newStepLine = `1. ${stepText}`;
+
+    // Steps content typically starts with a leading newline right after the
+    // "Steps to reproduce:" header — preserve that, then insert the new step,
+    // then the rest of the original (still-numbered-from-1) content.
+    const leadingMatch = loc.content.match(/^\n+/);
+    const leading = leadingMatch ? leadingMatch[0] : "";
+    const rest = loc.content.slice(leading.length);
+    const newContent = `${leading}${newStepLine}\n${rest}`;
+
+    return {
+      changed: true,
+      text: fullText.slice(0, loc.sectionStart) + newContent + fullText.slice(loc.sectionEnd),
+      issueType,
+      stepText,
+    };
+  }
+
+  // Resource Link is optional — only flagged if present under the wrong label.
+  function checkResourceLinkLabel(detailsText) {
+    const match = String(detailsText || "").match(/^\s*(resource link|reference link|references)\s*:/im);
+    if (!match) return { ok: true, detail: "" };
+    if (match[1].toLowerCase() === "references") {
+      return {
+        ok: false,
+        detail: 'Found a "References:" section \u2014 label should be "Resource Link:" instead.',
+        suggestedText: "Resource Link:",
+        fix: { target: "details", apply: (text) => text.replace(/references\s*:/i, "Resource Link:") },
+      };
+    }
+    return { ok: true, detail: "" };
+  }
+
+  // Accepts either dot- or underscore-separated numbers after "WCAG" (e.g.
+  // "WCAG_1.4.3-..." or "WCAG_1_4_3-...") and always normalizes the captured
+  // number to dot-separated, so a difference in separator style alone can't
+  // cause a false mismatch (or a false match) against extractWcagScField's
+  // always-dotted output. Also captures the "-Name_Suffix" part (if any) so a
+  // corrected label can be suggested without losing the existing name.
+  function extractWcagLabel(detailsText) {
+    const m = String(detailsText || "").match(/WCAG[_-]?(\d+)[._](\d+)[._](\d+)([-_][A-Za-z0-9_]*)?/i);
+    if (!m) return null;
+    return { raw: m[0], number: `${m[1]}.${m[2]}.${m[3]}`, suffix: m[4] || "" };
+  }
+
+  function extractSeverityLabelToken(detailsText) {
+    const m = String(detailsText || "").match(/severity[123]_accessibility/i);
+    return m ? m[0] : null;
+  }
+
+  // Reads the value on the line right after "Applicable WCAG Success
+  // Criterion:" (same next-line convention as Screen Name — see
+  // extractScreenNameFromDetails) and pulls the leading X.X.X number out of it.
+  // Reads the FULL text value on the line right after "Applicable WCAG
+  // Success Criterion:" (not just the leading number) — used for exact
+  // matching against Excel, since the Excel data must be matched exactly,
+  // not just have a matching SC number.
+  function extractWcagScFieldRaw(detailsText) {
+    const lines = String(detailsText || "").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (/^applicable wcag success criterion:$/i.test(lines[i].trim())) {
+        for (let j = i + 1; j < lines.length; j++) {
+          const line = lines[j].trim();
+          if (line) return line;
+        }
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // Collapses internal whitespace and lowercases, so exact-match comparisons
+  // aren't tripped up by incidental spacing differences while still catching
+  // any real difference in wording/content.
+  function normalizeForExactMatch(text) {
+    return String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  // Replaces the value on the line right after "Applicable WCAG Success
+  // Criterion:" with newValue (inserting a value line if the header exists
+  // but has none yet). Re-locates the header fresh each call, so this is
+  // safe to apply even after other fixes have modified the text.
+  function replaceWcagScFieldValue(detailsText, newValue) {
+    const lines = String(detailsText || "").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (/^applicable wcag success criterion:$/i.test(lines[i].trim())) {
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].trim()) {
+            lines[j] = newValue;
+            return lines.join("\n");
+          }
+        }
+        lines.splice(i + 1, 0, newValue);
+        return lines.join("\n");
+      }
+    }
+    return detailsText;
+  }
+
+  // Looks up the WCAG-JIRA reference row for the live Checkpoint. Shared by
+  // both checks below so "Applicable WCAG Success Criterion:" and "Labels:
+  // WCAG_..." are each validated against the same single source of truth
+  // (the Excel reference sheet) rather than against each other.
+  async function lookupWcagReferenceRow(checkpointText) {
+    const byType = await loadReferenceData();
+    if (!byType) {
+      return { row: null, error: `Reference data unavailable \u2014 ${referenceLoadError || "unknown reason"}.` };
+    }
+    const row = lookupByScCode(byType, "WCAG-JIRA", checkpointText);
+    if (!row) {
+      return { row: null, error: `No WCAG-JIRA reference row found for Checkpoint "${checkpointText || "(empty)"}".` };
+    }
+    return { row, error: null };
+  }
+
+  // Adobe-only: "Applicable WCAG Success Criterion:" must match the Excel
+  // reference sheet's row for the live Checkpoint EXACTLY (the row's Key
+  // column, full text) — not just have a matching leading SC number. E.g.
+  // "1.4.3 Contrast" does not pass just because "1.4.3" matches; it must
+  // read the full "1.4.3 Contrast (Minimum) (Level AA)" from Excel.
+  async function checkApplicableWcagScField(detailsText, checkpointText) {
+    const scFieldRaw = extractWcagScFieldRaw(detailsText);
+    if (!scFieldRaw) {
+      return { ok: false, detail: 'Couldn\'t read a value from "Applicable WCAG Success Criterion:".' };
+    }
+
+    const { row, error } = await lookupWcagReferenceRow(checkpointText);
+    if (!row) return { ok: false, detail: `${error} Can't verify "Applicable WCAG Success Criterion:" against Excel.` };
+
+    const expected = String(row.key || "").trim();
+    if (!expected) {
+      return { ok: false, detail: "Excel reference row has no value in the Key column." };
+    }
+
+    if (normalizeForExactMatch(scFieldRaw) !== normalizeForExactMatch(expected)) {
+      return {
+        ok: false,
+        detail: `"${scFieldRaw}" doesn't exactly match Excel (per Checkpoint): "${expected}".`,
+        suggestedText: expected,
+        fix: { target: "details", apply: (text) => replaceWcagScFieldValue(text, expected) },
+      };
+    }
+    return { ok: true, detail: "" };
+  }
+
+  // Adobe-only: the "WCAG_..." label inside Labels: must match the Excel
+  // reference sheet's row for the live Checkpoint EXACTLY (the row's Label
+  // column, full text) — not just have a matching SC number. Also checks
+  // SeverityN_Accessibility capitalization, if that label is present.
+  async function checkLabelsWcagTag(detailsText, checkpointText) {
+    const wcagLabel = extractWcagLabel(detailsText);
+    if (!wcagLabel) {
+      return { ok: false, detail: "No WCAG_... label found in the Labels section." };
+    }
+
+    const { row, error } = await lookupWcagReferenceRow(checkpointText);
+    if (!row) return { ok: false, detail: `${error} Can't verify "Labels: WCAG_" against Excel.` };
+
+    const expectedLabel = String(row.label || "").trim();
+    if (!expectedLabel) {
+      return { ok: false, detail: "Excel reference row has no value in the Label column." };
+    }
+
+    if (normalizeForExactMatch(wcagLabel.raw) !== normalizeForExactMatch(expectedLabel)) {
+      return {
+        ok: false,
+        detail: `"${wcagLabel.raw}" doesn't exactly match Excel (per Checkpoint): "${expectedLabel}".`,
+        suggestedText: expectedLabel,
+        fix: {
+          target: "details",
+          apply: (text) => text.replace(/WCAG[_-]?\d+[._]\d+[._]\d+([-_][A-Za-z0-9_]*)?/i, expectedLabel),
+        },
+      };
+    }
+
+    const severityToken = extractSeverityLabelToken(detailsText);
+    if (severityToken && !/^Severity[123]_Accessibility$/.test(severityToken)) {
+      const corrected = `Severity${severityToken.match(/[123]/)[0]}_Accessibility`;
+      return {
+        ok: false,
+        detail: `Severity label "${severityToken}" should be capitalized like "Severity1_Accessibility".`,
+        suggestedText: corrected,
+        fix: { target: "details", apply: (text) => text.replace(/severity[123]_accessibility/i, corrected) },
+      };
+    }
+    return { ok: true, detail: "" };
+  }
+
+  // Given a live Impact value, returns the Severity number it requires
+  // (Critical -> 1, Serious/Moderate -> 2, Minor -> 3), or null if the Impact
+  // text doesn't match a known value.
+  function expectedSeverityNumberForImpact(impactText) {
+    const norm = String(impactText || "").trim().toLowerCase();
+    if (norm === "critical") return 1;
+    if (norm === "serious" || norm === "moderate") return 2;
+    if (norm === "minor") return 3;
+    return null;
+  }
+
+  // SeverityN_Accessibility is mandatory for every issue. Impact (read live
+  // off the page) is the source of truth: this derives the Severity label the
+  // issue *should* have from Impact, then checks that against what's actually
+  // in Labels — flag if they disagree, rather than starting from the Severity
+  // label and treating Impact as secondary.
+  function checkSeverityImpactConsistency(detailsText, impactText) {
+    const token = extractSeverityLabelToken(detailsText);
+    const actualSeverityNum = token ? Number(token.match(/[123]/)[0]) : null;
+
+    if (!actualSeverityNum) {
+      // No fix offered — where to insert a brand-new Labels line is
+      // ambiguous, unlike correcting one that's already present.
+      return { ok: false, detail: "SeverityN_Accessibility label is missing from Labels \u2014 required for every issue." };
+    }
+
+    const impactNorm = String(impactText || "").trim();
+    if (!impactNorm) {
+      return {
+        ok: false,
+        detail: `Couldn't read the live Impact field to determine the required Severity label (Details currently has Severity${actualSeverityNum}_Accessibility).`,
+      };
+    }
+
+    const expectedSeverityNum = expectedSeverityNumberForImpact(impactNorm);
+    if (!expectedSeverityNum) {
+      return {
+        ok: false,
+        detail: `Impact "${impactText}" doesn't match a known severity mapping (Critical/Serious/Moderate/Minor).`,
+      };
+    }
+
+    if (expectedSeverityNum !== actualSeverityNum) {
+      const corrected = `Severity${expectedSeverityNum}_Accessibility`;
+      return {
+        ok: false,
+        detail: `Impact "${impactText}" requires Severity${expectedSeverityNum}_Accessibility, but Details has Severity${actualSeverityNum}_Accessibility.`,
+        suggestedText: corrected,
+        fix: { target: "details", apply: (text) => text.replace(/severity[123]_accessibility/i, corrected) },
+      };
+    }
+    return { ok: true, detail: "" };
+  }
+
+  // Rebuilds a corrected Summary using the current title text (unwrapped if
+  // it was already wrapped) plus the Screen Name/Elements pulled fresh from
+  // Details — same logic the Summary Update tab's regenerate() uses, exposed
+  // here so the Sanity "Correct" action can apply the identical fix.
+  function buildCorrectedSummary(currentSummaryText, detailsText, project) {
+    const screenName = extractScreenNameFromDetails(detailsText);
+    const elements = extractElementsFromText(detailsText);
+    const expectedElementsSummary = formatElementsSummary(elements);
+    const wrapped = parseWrappedSummary(currentSummaryText);
+    const modifiedTitle = wrapped ? wrapped.modifiedTitle : currentSummaryText || "";
+    const prefix = buildTitlePrefix(project, modifiedTitle, screenName);
+    return `${prefix} (${expectedElementsSummary})`;
+  }
+
+  // Runs every applicable check and returns an ordered list of
+  // { name, ok, detail, suggestedText?, fix? }, in the same top-to-bottom
+  // order the corresponding fields appear in the issue (Summary/Screenshot
+  // first, then Environment, then Steps to reproduce, then Remediation/Labels
+  // near the bottom) so a failure is easy to locate. Each name is prefixed
+  // with the field label it corresponds to. Where a single correct value can
+  // be determined, `fix` describes how to apply it (target: "summary" or
+  // "details", apply: (text) => correctedText) and `suggestedText` is the
+  // human-readable value to show for copy/paste. project is "adobe" or
+  // "yahoo" — the WCAG/Labels/Severity checks are Adobe-only, since Yahoo
+  // issues have no Labels: section at all.
+  async function runSanityChecks({ project, summaryText, detailsText, screenshotFound, hasScreenshot, severityText, checkpointText }) {
+    const results = [];
+
+    const wrapped = parseWrappedSummary(summaryText);
+    const summaryOk = !!wrapped && wrappedFormatMatchesProject(wrapped, project);
+    results.push({
+      name: "Summary: Format",
+      ok: summaryOk,
+      detail: wrapped ? "" : "Summary doesn't match the wrapped Title - Screen (Elements) format.",
+      suggestedText: summaryOk ? undefined : buildCorrectedSummary(summaryText, detailsText, project),
+      fix: summaryOk
+        ? undefined
+        : { target: "summary", apply: (text, det) => buildCorrectedSummary(text, det || detailsText, project) },
+    });
+
+    results.push({
+      name: "Attachments: Screenshot",
+      ok: !!hasScreenshot,
+      detail: hasScreenshot
+        ? ""
+        : screenshotFound
+        ? "The screenshot upload area was found but appears empty."
+        : "Couldn't find the Attachments section (#issue-more-info > fieldset > div:nth-child(6)) on the page.",
+    });
+
+    const authCheck = checkAuthenticationState(detailsText);
+    results.push({
+      name: "Authentication State: Logged In/Out",
+      ok: authCheck.ok,
+      detail: authCheck.detail,
+      suggestedText: authCheck.suggestedText,
+    });
+
+    const stepOneUrlCheck = checkStepOneOpensUrl(detailsText);
+    let stepOneFix;
+    let stepOneSuggestion;
+    if (!stepOneUrlCheck.ok) {
+      const insertion = autoInsertStepOneIfMissing(detailsText);
+      if (insertion.changed) {
+        stepOneSuggestion = `1. ${insertion.stepText}`;
+        stepOneFix = { target: "details", apply: (text) => fixStepsNumberingInDetails(autoInsertStepOneIfMissing(text).text, 1) };
+      }
+    }
+    results.push({
+      name: "Steps to reproduce: Step 1 Opens the URL",
+      ok: stepOneUrlCheck.ok,
+      detail: stepOneUrlCheck.detail,
+      suggestedText: stepOneSuggestion,
+      fix: stepOneFix,
+    });
+
+    const stepsCheck = checkStepsIssueTypeConsistency(detailsText);
+    results.push({
+      name: "Steps to reproduce: Step 1 vs Issue Type",
+      ok: stepsCheck.ok,
+      detail: stepsCheck.detail,
+    });
+
+    const resourceLinkCheck = checkResourceLinkLabel(detailsText);
+    results.push({
+      name: "Resource Link: Label",
+      ok: resourceLinkCheck.ok,
+      detail: resourceLinkCheck.detail,
+      suggestedText: resourceLinkCheck.suggestedText,
+      fix: resourceLinkCheck.fix,
+    });
+
+    if (project !== "yahoo") {
+      const wcagScCheck = await checkApplicableWcagScField(detailsText, checkpointText);
+      results.push({
+        name: "Applicable WCAG Success Criterion:",
+        ok: wcagScCheck.ok,
+        detail: wcagScCheck.detail,
+        suggestedText: wcagScCheck.suggestedText,
+        fix: wcagScCheck.fix,
+      });
+
+      const labelsWcagCheck = await checkLabelsWcagTag(detailsText, checkpointText);
+      results.push({
+        name: "Labels: WCAG_",
+        ok: labelsWcagCheck.ok,
+        detail: labelsWcagCheck.detail,
+        suggestedText: labelsWcagCheck.suggestedText,
+        fix: labelsWcagCheck.fix,
+      });
+
+      const severityCheck = checkSeverityImpactConsistency(detailsText, severityText);
+      results.push({
+        name: "Labels: Severity vs Impact",
+        ok: severityCheck.ok,
+        detail: severityCheck.detail,
+        suggestedText: severityCheck.suggestedText,
+        fix: severityCheck.fix,
+      });
+    }
+
+    return results;
+  }
+
+  // Renders the tick/cross list + failed-only summary as compact rows (same
+  // visual language as the existing "Status & Checks" panel — small text
+  // lines, red for failures) instead of one large monospace block, so it
+  // stays tidy without changing the popup's fixed size. Failed items that
+  // have a deterministic `fix` get a checkbox; checking one or more and
+  // clicking "Correct" applies just those fixes and re-writes the page.
+  function renderSanityResults(container, results, actions) {
+    container.innerHTML = "";
+
+    results.forEach((r) => {
+      const line = document.createElement("div");
+      line.className = "count-badge" + (r.ok ? "" : " status-error");
+      line.textContent = `${r.ok ? "\u2714" : "\u2716"} ${r.name}`;
+      container.appendChild(line);
+    });
+
+    const failed = results.filter((r) => !r.ok);
+    const summaryLine = document.createElement("div");
+    summaryLine.className = "count-badge" + (failed.length ? " status-error" : "");
+    summaryLine.style.fontWeight = "700";
+    summaryLine.style.marginTop = "4px";
+    summaryLine.textContent = failed.length ? `Failed (${failed.length}):` : "All sanity checks passed.";
+    container.appendChild(summaryLine);
+
+    const checkboxEntries = [];
+
+    failed.forEach((r) => {
+      const row = document.createElement("div");
+      row.style.display = "flex";
+      row.style.alignItems = "flex-start";
+      row.style.gap = "6px";
+      row.style.margin = "2px 0";
+
+      if (r.fix) {
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.style.marginTop = "3px";
+        checkbox.style.flexShrink = "0";
+        checkboxEntries.push({ checkbox, result: r });
+        row.appendChild(checkbox);
+      } else {
+        const spacer = document.createElement("span");
+        spacer.style.width = "24px";
+        spacer.style.flexShrink = "0";
+        row.appendChild(spacer);
+      }
+
+      const textCol = document.createElement("div");
+      textCol.style.flex = "1";
+
+      const detailLine = document.createElement("div");
+      detailLine.className = "count-badge status-error";
+      detailLine.style.margin = "0";
+      detailLine.textContent = `\u2022 ${r.name}: ${r.detail || "See check above."}`;
+      textCol.appendChild(detailLine);
+
+      if (r.suggestedText) {
+        const suggestLine = document.createElement("div");
+        suggestLine.className = "count-badge status-error";
+        suggestLine.style.margin = "0";
+        suggestLine.textContent = `Suggested: ${r.suggestedText}`;
+        textCol.appendChild(suggestLine);
+      }
+
+      row.appendChild(textCol);
+      container.appendChild(row);
+    });
+
+    if (checkboxEntries.length && actions && actions.onCorrect) {
+      const correctBtn = document.createElement("button");
+      correctBtn.className = "action-btn";
+      correctBtn.type = "button";
+      correctBtn.textContent = "Correct";
+      correctBtn.style.marginTop = "8px";
+      container.appendChild(correctBtn);
+
+      correctBtn.addEventListener("click", async () => {
+        const selected = checkboxEntries.filter((c) => c.checkbox.checked).map((c) => c.result);
+        if (!selected.length) return;
+        correctBtn.disabled = true;
+        correctBtn.textContent = "Correcting\u2026";
+        try {
+          await actions.onCorrect(selected);
+          // On success, actions.onCorrect re-runs Sanity, which rebuilds this
+          // whole container — no further cleanup needed here.
+        } catch (err) {
+          correctBtn.disabled = false;
+          correctBtn.textContent = "Correct";
+          const errLine = document.createElement("div");
+          errLine.className = "count-badge status-error";
+          errLine.textContent = "Correction error: " + err.message;
+          container.appendChild(errLine);
+        }
+      });
+    }
+  }
+
+  // Builds the read-only container used to display Sanity results — a plain
+  // div (rows are appended by renderSanityResults), no fixed min-height so it
+  // only takes up as much space as the current results need.
+  function buildSanityOutputBlock() {
+    const box = document.createElement("div");
+    box.textContent = "";
+    return box;
+  }
+
+  // Runs the live-page read + all Sanity checks immediately (no artificial
+  // delay) against whatever's currently in summaryEl.value/detailsEl.value,
+  // and renders the result into outputEl with Correct-button wiring. summaryEl
+  // and detailsEl just need a `.value` property — either a real form element
+  // (kept in sync with the page) or a plain `{ value }` holder.
+  async function runSanityCheckNow({ project, summaryEl, detailsEl, outputEl }) {
+    try {
+      const tab = await getTargetTab();
+      if (!tab || !tab.id) throw new Error("No active browser tab found.");
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: sanityPageExtractor,
+      });
+      const liveData = results && results[0] ? results[0].result : {};
+      const checks = await runSanityChecks({
+        project,
+        summaryText: summaryEl.value,
+        detailsText: detailsEl.value,
+        screenshotFound: liveData.screenshotFound,
+        hasScreenshot: liveData.hasScreenshot,
+        severityText: liveData.severity,
+        checkpointText: liveData.checkpoint,
+      });
+      renderSanityResults(outputEl, checks, {
+        onCorrect: (selected) => applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected }),
+      });
+    } catch (err) {
+      outputEl.innerHTML = "";
+      const errLine = document.createElement("div");
+      errLine.className = "count-badge status-error";
+      errLine.textContent = "Sanity check error: " + err.message;
+      outputEl.appendChild(errLine);
+    }
+  }
+
+  // Applies the fixes for just the checked failed items, writes the
+  // corrected Summary/Details back to the live page, syncs summaryEl/detailsEl
+  // to match, then immediately re-runs Sanity so the panel reflects the fix.
+  async function applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected }) {
+    let summaryText = summaryEl.value;
+    let detailsText = detailsEl.value;
+
+    selected.forEach((r) => {
+      if (!r.fix) return;
+      if (r.fix.target === "summary") {
+        summaryText = r.fix.apply(summaryText, detailsText);
+      } else {
+        detailsText = r.fix.apply(detailsText, summaryText);
+      }
+    });
+
+    const tab = await getTargetTab();
+    if (!tab || !tab.id) throw new Error("No active browser tab found.");
+    const writeResults = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: pageWriter,
+      args: [summaryText, detailsText],
+    });
+    const writeResult = writeResults && writeResults[0] ? writeResults[0].result : null;
+    if (!writeResult) throw new Error("Could not write corrections to the page.");
+
+    summaryEl.value = summaryText;
+    detailsEl.value = detailsText;
+
+    await runSanityCheckNow({ project, summaryEl, detailsEl, outputEl });
+  }
+
+  // Kicks off the first Sanity run 1 second after a write (giving the page a
+  // moment to settle), against whatever's currently in summaryEl.value/
+  // detailsEl.value.
+  function scheduleSanityCheck({ project, summaryEl, detailsEl, outputEl }) {
+    outputEl.innerHTML = "";
+    const waitingLine = document.createElement("div");
+    waitingLine.className = "count-badge";
+    waitingLine.textContent = "Performing sanity for this issue\u2026 (waiting for the page to update)";
+    outputEl.appendChild(waitingLine);
+    setTimeout(() => {
+      runSanityCheckNow({ project, summaryEl, detailsEl, outputEl });
+    }, 1000);
   }
 
   // Adobe: "[Accessibility] - <Modified title> - <Screen Name>"
@@ -1005,10 +1896,24 @@
     let summaryProject = "adobe"; // independent from the Automation Template tab's toggle
     let lastParsedContext = null; // result of parseContextFromDetails(), refreshed each Get Data
     let platformState = { value: "", locked: false }; // persisted via chrome.storage — sticky across issues
+    let nativeContextState = { locked: false, fields: {} }; // per-device-type, persisted via chrome.storage
+
+    const deviceTypeRow = buildDeviceTypeRow(() => {
+      loadNativeContextState();
+      refreshContextPreview();
+      regenerate();
+      refreshUniversalChecks();
+    });
+    els.content.appendChild(deviceTypeRow);
 
     const radioRow = document.createElement("div");
     radioRow.className = "controls-row";
     radioRow.style.justifyContent = "center";
+    radioRow.style.alignItems = "center";
+    const summaryProjectLabel = document.createElement("label");
+    summaryProjectLabel.className = "inline-group-label";
+    summaryProjectLabel.textContent = "Project:";
+    radioRow.appendChild(summaryProjectLabel);
     buildSummaryUpdateProjectRadios(
       () => summaryProject,
       (project) => {
@@ -1072,6 +1977,114 @@
 
     loadPlatformState();
 
+    // ---- Native App Context panel (Android Native / iOS Native only) ----
+    const nativePanel = document.createElement("div");
+    nativePanel.className = "errors-section";
+    nativePanel.style.display = "none";
+
+    const nativeHeading = document.createElement("div");
+    nativeHeading.className = "errors-heading";
+    nativeHeading.textContent = "Native App Context (fill in once per device, then lock)";
+    nativePanel.appendChild(nativeHeading);
+
+    const NATIVE_FIELD_DEFS = [
+      { key: "testingApplication", label: "Testing Application", placeholder: "e.g. Adobe Lightroom" },
+      { key: "authState", label: "Authentication State", placeholder: "e.g. Logged out" },
+      { key: "device", label: "Device", placeholder: "e.g. iPhone 15" },
+      { key: "os", label: "Operating System", placeholder: "e.g. iOS" },
+      { key: "osVersion", label: "OS Version", placeholder: "e.g. 18.6.2" },
+      { key: "appVersion", label: "Application Version", placeholder: "e.g. 11.3.2" },
+      {
+        key: "toolDescription",
+        label: "Device/Tool description line",
+        placeholder: "e.g. Iphone using Adobe Lightroom application",
+      },
+    ];
+
+    const nativeInputs = {};
+    NATIVE_FIELD_DEFS.forEach((def) => {
+      const fieldRow = document.createElement("div");
+      fieldRow.className = "template-field";
+      const fieldLabel = document.createElement("label");
+      fieldLabel.textContent = def.label;
+      const fieldInput = document.createElement("input");
+      fieldInput.type = "text";
+      fieldInput.placeholder = def.placeholder;
+      fieldRow.appendChild(fieldLabel);
+      fieldRow.appendChild(fieldInput);
+      nativePanel.appendChild(fieldRow);
+      nativeInputs[def.key] = fieldInput;
+    });
+
+    const nativeLockRow = document.createElement("div");
+    nativeLockRow.className = "controls-row";
+    const nativeLockBtn = document.createElement("button");
+    nativeLockBtn.className = "copy-btn";
+    nativeLockBtn.type = "button";
+    nativeLockRow.appendChild(nativeLockBtn);
+    nativePanel.appendChild(nativeLockRow);
+
+    els.content.appendChild(nativePanel);
+
+    function applyNativeContextStateToUi() {
+      NATIVE_FIELD_DEFS.forEach((def) => {
+        nativeInputs[def.key].value = (nativeContextState.fields && nativeContextState.fields[def.key]) || "";
+        nativeInputs[def.key].disabled = !!nativeContextState.locked;
+      });
+      nativeLockBtn.textContent = nativeContextState.locked ? "\uD83D\uDD12 Locked" : "\uD83D\uDD13 Lock";
+    }
+
+    async function loadNativeContextState() {
+      const stored = await storageGet(nativeContextStorageKeyFor(currentDeviceType));
+      nativeContextState = stored || { locked: false, fields: {} };
+      applyNativeContextStateToUi();
+      refreshNativeContextPreview();
+    }
+
+    nativeLockBtn.addEventListener("click", async () => {
+      if (nativeContextState.locked) {
+        nativeContextState = { locked: false, fields: nativeContextState.fields || {} };
+      } else {
+        const fields = {};
+        NATIVE_FIELD_DEFS.forEach((def) => {
+          fields[def.key] = nativeInputs[def.key].value.trim();
+        });
+        nativeContextState = { locked: true, fields };
+      }
+      await storageSet(nativeContextStorageKeyFor(currentDeviceType), nativeContextState);
+      applyNativeContextStateToUi();
+      refreshNativeContextPreview();
+    });
+
+    loadNativeContextState();
+
+    const nativeContextBlock = buildFieldBlock("Environment & Context (Native format)", "");
+    nativeContextBlock.style.display = "none";
+    els.content.appendChild(nativeContextBlock);
+    const nativeContextTextarea = nativeContextBlock.querySelector("textarea");
+
+    // Shows/hides the Native panel + preview based on the current Device Type,
+    // and (re)builds the preview text from the locked fields. The preview is
+    // editable directly, same pattern as the Yahoo Context preview — whatever
+    // is in it at Update time is what gets written back.
+    function refreshNativeContextPreview() {
+      const isNative = isNativeDeviceType(currentDeviceType);
+      nativePanel.style.display = isNative ? "" : "none";
+      nativeContextBlock.style.display = isNative ? "" : "none";
+      if (!isNative) return;
+      nativeContextTextarea.value = buildNativeEnvironmentContextBlock(nativeContextState.fields || {});
+    }
+
+    // Builds the final Details text for Native device types by splicing the
+    // Native Context preview into the Environment/Context region, in place of
+    // buildFinalDetailsText()'s Web/Yahoo-only Context splice.
+    function buildFinalDetailsTextNative() {
+      if (!lastExtracted) return "";
+      const loc = locateEnvironmentContextSection(lastExtracted.details);
+      if (!loc) return lastExtracted.details;
+      return spliceEnvironmentContextIntoDetails(lastExtracted.details, loc, nativeContextTextarea.value);
+    }
+
     const actionRow = document.createElement("div");
     actionRow.className = "controls-row";
     const getDataBtn = document.createElement("button");
@@ -1108,9 +2121,14 @@
     summaryDataCheckMsg.className = "count-badge";
     errorsSection.appendChild(summaryDataCheckMsg);
 
-    const pageCheckMsg = document.createElement("div");
-    pageCheckMsg.className = "count-badge";
-    errorsSection.appendChild(pageCheckMsg);
+    const platformCheckMsg = document.createElement("div");
+    platformCheckMsg.className = "count-badge";
+    platformCheckMsg.style.display = "none";
+    errorsSection.appendChild(platformCheckMsg);
+
+    const stepOneUrlCheckMsg = document.createElement("div");
+    stepOneUrlCheckMsg.className = "count-badge";
+    errorsSection.appendChild(stepOneUrlCheckMsg);
 
     const stepsCheckMsg = document.createElement("div");
     stepsCheckMsg.className = "count-badge";
@@ -1120,10 +2138,9 @@
     remediationCheckMsg.className = "count-badge";
     errorsSection.appendChild(remediationCheckMsg);
 
-    const platformCheckMsg = document.createElement("div");
-    platformCheckMsg.className = "count-badge";
-    platformCheckMsg.style.display = "none";
-    errorsSection.appendChild(platformCheckMsg);
+    const pageCheckMsg = document.createElement("div");
+    pageCheckMsg.className = "count-badge";
+    errorsSection.appendChild(pageCheckMsg);
 
     els.content.appendChild(errorsSection);
 
@@ -1151,35 +2168,15 @@
     applyRow.appendChild(applyBtn);
     els.content.appendChild(applyRow);
 
-    // If the live Summary already looks like it's in the expected wrapped
-    // format ("Accessibility - Title - Screen (Elements)" for Adobe, without
-    // the prefix for Yahoo), extracts its pieces. Returns null if it doesn't
-    // look wrapped at all (e.g. a plain freeform title never touched by this tool).
-    function parseWrappedSummary(summaryText) {
-      const str = String(summaryText || "").trim();
-      const m = str.match(/^(.*)\(([^()]*)\)\s*$/);
-      if (!m) return null;
-      const rest = m[1].trim();
-      const elementsRaw = m[2].trim();
-      const lastDash = rest.lastIndexOf(" - ");
-      if (lastDash === -1) return null;
-      const screenName = rest.slice(lastDash + 3).trim();
-      let modifiedTitle = rest.slice(0, lastDash).trim();
-      let hasAccessibilityPrefix = false;
-      if (/^\[?Accessibility\]?\s*-\s*/i.test(modifiedTitle)) {
-        hasAccessibilityPrefix = true;
-        modifiedTitle = modifiedTitle.replace(/^\[?Accessibility\]?\s*-\s*/i, "").trim();
-      }
-      return { modifiedTitle, screenName, elementsRaw, hasAccessibilityPrefix };
-    }
-
-    // Whether a parsed summary's prefix presence matches what the current
-    // project expects (Adobe -> has "Accessibility - ", Yahoo -> doesn't).
-    function wrappedFormatMatchesProject(wrapped, project) {
-      if (!wrapped) return false;
-      const expectsPrefix = project !== "yahoo";
-      return wrapped.hasAccessibilityPrefix === expectsPrefix;
-    }
+    const sanitySection = document.createElement("div");
+    sanitySection.className = "errors-section";
+    const sanityHeading = document.createElement("div");
+    sanityHeading.className = "errors-heading";
+    sanityHeading.textContent = "Sanity";
+    sanitySection.appendChild(sanityHeading);
+    const sanityOutput = buildSanityOutputBlock();
+    sanitySection.appendChild(sanityOutput);
+    els.content.appendChild(sanitySection);
 
     function regenerate() {
       if (!lastExtracted) return;
@@ -1190,27 +2187,35 @@
       const wrapped = parseWrappedSummary(originalSummary);
       let modifiedTitle;
 
-      if (wrapped && wrappedFormatMatchesProject(wrapped, summaryProject)) {
-        // Already in the correct wrapped format — reuse just the real title
-        // text so we don't nest another "Accessibility - ... - ..." wrapper
-        // around an already-wrapped summary (that would duplicate the Screen
-        // Name/Elements instead of correcting them).
+      if (wrapped) {
+        // Already looks wrapped ("Title - Screen (Elements)") — reuse just the
+        // real title text (already prefix-stripped by parseWrappedSummary
+        // regardless of whether that prefix was expected) so we don't nest
+        // another wrapper around an already-wrapped summary. This applies
+        // even if the prefix doesn't match the current project — that
+        // mismatch is flagged below, not silently treated as a fresh title.
         modifiedTitle = wrapped.modifiedTitle;
 
+        const formatMismatch = !wrappedFormatMatchesProject(wrapped, summaryProject);
         const screenMismatch = wrapped.screenName.trim().toLowerCase() !== (screenName || "").trim().toLowerCase();
         const elementsMismatch = wrapped.elementsRaw.trim() !== expectedElementsSummary.trim();
 
-        if (screenMismatch || elementsMismatch) {
-          const parts = [];
-          if (screenMismatch) parts.push(`Screen Name shows "${wrapped.screenName}" (expected "${screenName || ""}")`);
-          if (elementsMismatch) parts.push(`Elements show "${wrapped.elementsRaw}" (expected "${expectedElementsSummary}")`);
-          setStatus(
-            summaryDataCheckMsg,
-            `\u26D4 Summary already in the correct format but data is stale: ${parts.join("; ")}. Corrected below.`,
-            true
+        const parts = [];
+        if (formatMismatch) {
+          const projectLabel = summaryProject === "yahoo" ? "Yahoo" : "Adobe";
+          parts.push(
+            wrapped.hasAccessibilityPrefix
+              ? `Summary has an "[Accessibility] - " prefix, but ${projectLabel} format doesn't use one`
+              : `Summary is missing the "[Accessibility] - " prefix that ${projectLabel} format requires`
           );
+        }
+        if (screenMismatch) parts.push(`Screen Name shows "${wrapped.screenName}" (expected "${screenName || ""}")`);
+        if (elementsMismatch) parts.push(`Elements show "${wrapped.elementsRaw}" (expected "${expectedElementsSummary}")`);
+
+        if (parts.length) {
+          setStatus(summaryDataCheckMsg, `\u26D4 Summary: ${parts.join("; ")}. Corrected below.`, true);
         } else {
-          setStatus(summaryDataCheckMsg, "Summary format and data both correct.", false);
+          setStatus(summaryDataCheckMsg, "Summary: format and data both correct.", false);
         }
       } else {
         modifiedTitle = originalSummary || "";
@@ -1226,7 +2231,7 @@
     // Platform-mismatch check. Hidden entirely for Adobe — this part only
     // applies to Yahoo.
     function refreshContextPreview() {
-      const isYahoo = summaryProject === "yahoo";
+      const isYahoo = summaryProject === "yahoo" && !isNativeDeviceType(currentDeviceType);
       platformRow.style.display = isYahoo ? "" : "none";
       contextBlock.style.display = isYahoo ? "" : "none";
       contextStatusMsg.style.display = isYahoo ? "" : "none";
@@ -1264,12 +2269,30 @@
     // Yahoo, unlike the Context/Platform stuff above which is Yahoo-only.
     function refreshUniversalChecks() {
       if (!lastExtracted) {
+        setStatus(stepOneUrlCheckMsg, "", false);
         setStatus(stepsCheckMsg, "", false);
         setStatus(remediationCheckMsg, "", false);
         return;
       }
+      checkStepOneUrlLive(lastExtracted.details);
       checkStepsNumbering(lastExtracted.details);
       checkRemediationColon(lastExtracted.details);
+    }
+
+    // Shows Step 1's URL-opening status live (same check used by the
+    // auto-insert fix on Update, and by the post-Update Sanity panel) so it's
+    // visible right after Get Data, before Update is even clicked.
+    function checkStepOneUrlLive(detailsText) {
+      const check = checkStepOneOpensUrl(detailsText);
+      if (check.ok) {
+        setStatus(stepOneUrlCheckMsg, "\u2714 Steps to reproduce: Step 1 Opens the URL.", false);
+      } else {
+        setStatus(
+          stepOneUrlCheckMsg,
+          `\u2716 Steps to reproduce: Step 1 Opens the URL \u2014 ${check.detail} Will be inserted automatically when you click Update.`,
+          true
+        );
+      }
     }
 
     // Flags when Details already has a Platform value that differs from the
@@ -1284,11 +2307,11 @@
       if (existingPlatform.toLowerCase() !== lockedPlatform.toLowerCase()) {
         setStatus(
           platformCheckMsg,
-          `\u26D4 Platform different \u2014 locked value is "${lockedPlatform}" but Details already has "${existingPlatform}".`,
+          `\u26D4 Context (Platform): different \u2014 locked value is "${lockedPlatform}" but Details already has "${existingPlatform}".`,
           true
         );
       } else {
-        setStatus(platformCheckMsg, `Locked Platform matches Details ("${existingPlatform}").`, false);
+        setStatus(platformCheckMsg, `Context (Platform): matches Details ("${existingPlatform}").`, false);
       }
     }
 
@@ -1304,11 +2327,11 @@
       if (!result.ok) {
         setStatus(
           stepsCheckMsg,
-          `\u26D4 Steps numbering issue: ${numbers.join(",")} \u2014 will be corrected automatically when you click Update.`,
+          `\u26D4 Steps to reproduce: numbering issue ${numbers.join(",")} \u2014 will be corrected automatically when you click Update.`,
           true
         );
       } else {
-        setStatus(stepsCheckMsg, `Steps numbering OK: ${numbers.join(",")}.`, false);
+        setStatus(stepsCheckMsg, `Steps to reproduce: numbering OK (${numbers.join(",")}).`, false);
       }
     }
 
@@ -1323,11 +2346,11 @@
         const preview = result.badLines.map((l) => `"${l}"`).join(", ");
         setStatus(
           remediationCheckMsg,
-          `\u26D4 Remediation Recommendation has dangling ":" line(s): ${preview} \u2014 will be corrected to ":-" when you click Update.`,
+          `\u26D4 Remediation Recommendation: dangling ":" line(s): ${preview} \u2014 will be corrected to ":-" when you click Update.`,
           true
         );
       } else {
-        setStatus(remediationCheckMsg, "Remediation Recommendation OK.", false);
+        setStatus(remediationCheckMsg, "Remediation Recommendation: OK.", false);
       }
     }
 
@@ -1345,7 +2368,11 @@
 
     function checkPageMismatch(pageField, screenName) {
       if (!screenName) {
-        setStatus(pageCheckMsg, "No \"Screen Name:\" line found in Details \u2014 can't check it against the Page field.", true);
+        setStatus(
+          pageCheckMsg,
+          "Screen Name: no \"Screen Name:\" line found in Details \u2014 can't check it against the Page field.",
+          true
+        );
         return;
       }
       const pageNorm = String(pageField || "").trim().toLowerCase();
@@ -1353,11 +2380,11 @@
       if (pageNorm !== screenNorm) {
         setStatus(
           pageCheckMsg,
-          `\u26D4 Page Name different \u2014 editor shows "${pageField || "(empty)"}" but Details lists Screen Name "${screenName}".`,
+          `\u26D4 Screen Name: different \u2014 editor shows "${pageField || "(empty)"}" but Details lists Screen Name "${screenName}".`,
           true
         );
       } else {
-        setStatus(pageCheckMsg, `Page Name matches Screen Name ("${screenName}").`, false);
+        setStatus(pageCheckMsg, `Screen Name: matches ("${screenName}").`, false);
       }
     }
 
@@ -1390,6 +2417,7 @@
 
         regenerate();
         refreshContextPreview();
+        refreshNativeContextPreview();
         refreshUniversalChecks();
         setStatus(
           statusMsg,
@@ -1407,10 +2435,12 @@
       lastParsedContext = null;
       resultTextarea.value = "";
       contextTextarea.value = "";
+      sanityOutput.innerHTML = "";
       setStatus(statusMsg, "Cleared. Next Get Data will re-capture the Summary from the page.", false);
       setStatus(pageCheckMsg, "", false);
       setStatus(contextStatusMsg, "", false);
       setStatus(platformCheckMsg, "", false);
+      setStatus(stepOneUrlCheckMsg, "", false);
       setStatus(stepsCheckMsg, "", false);
       setStatus(remediationCheckMsg, "", false);
       setStatus(summaryDataCheckMsg, "", false);
@@ -1430,14 +2460,31 @@
         const tab = await getTargetTab();
         if (!tab || !tab.id) throw new Error("No active browser tab found.");
 
-        // Yahoo starts from the Context-corrected Details; Adobe starts from
-        // the Details as originally pulled. Both then get the same Steps-
-        // numbering and Remediation-colon fixes applied on top.
-        let detailsToWrite =
-          summaryProject === "yahoo" ? buildFinalDetailsText() : lastExtracted ? lastExtracted.details : "";
+        // Native device types splice in the Native App Context block instead
+        // of the Web Platform/OS/Browser fields; for Web, Yahoo starts from
+        // the Context-corrected Details while Adobe starts from the Details
+        // as originally pulled. All paths then get the same quote-fix, Steps-
+        // numbering, and Remediation-colon fixes applied on top.
+        let detailsToWrite;
+        if (isNativeDeviceType(currentDeviceType)) {
+          detailsToWrite = buildFinalDetailsTextNative();
+        } else if (summaryProject === "yahoo") {
+          detailsToWrite = buildFinalDetailsText();
+        } else {
+          detailsToWrite = lastExtracted ? lastExtracted.details : "";
+        }
+
+        detailsToWrite = fixSingleQuotesInSteps(detailsToWrite);
+
+        // If Step 1 doesn't open the referenced URL, insert the correct one
+        // automatically — worded per the issue type from Context (Screen
+        // Reader needs both actions in Step 1; Keyboard/Other just needs the
+        // URL opened) — then renumber everything sequentially from 1.
+        const stepInsertion = autoInsertStepOneIfMissing(detailsToWrite);
+        detailsToWrite = stepInsertion.text;
 
         const stepsBefore = extractStepNumbers(detailsToWrite).join(",");
-        detailsToWrite = fixStepsNumberingInDetails(detailsToWrite);
+        detailsToWrite = fixStepsNumberingInDetails(detailsToWrite, 1);
         const stepsAfter = extractStepNumbers(detailsToWrite).join(",");
         const stepsWereFixed = stepsBefore !== stepsAfter && stepsBefore !== "";
 
@@ -1459,6 +2506,11 @@
 
         const extras = [];
         if (stepsWereFixed) extras.push(`Steps numbering corrected (${stepsBefore} \u2192 ${stepsAfter}).`);
+        if (stepInsertion.changed) {
+          extras.push(
+            `Step 1 didn't open the URL \u2014 inserted "1. ${stepInsertion.stepText}" automatically (${stepInsertion.issueType} issue type).`
+          );
+        }
         if (remediationWasFixed) extras.push('Remediation Recommendation ":" corrected to ":-".');
 
         setStatus(
@@ -1468,6 +2520,15 @@
           }${extras.length ? " " + extras.join(" ") : ""}`,
           !summaryOk || !detailsOk
         );
+
+        if (summaryOk && detailsOk) {
+          scheduleSanityCheck({
+            project: summaryProject,
+            summaryEl: resultTextarea,
+            detailsEl: { value: detailsToWrite },
+            outputEl: sanityOutput,
+          });
+        }
       } catch (err) {
         setStatus(statusMsg, "Error updating: " + err.message, true);
       }
@@ -1475,6 +2536,17 @@
   }
 
   function renderTemplateMode() {
+    els.content.appendChild(buildDeviceTypeRow(() => render()));
+
+    if (isNativeDeviceType(currentDeviceType)) {
+      const notice = document.createElement("div");
+      notice.className = "template-notice";
+      notice.textContent =
+        "Automation issues aren't available for Native app testing \u2014 there's no automation tooling for native apps. Please use the Manual Results tab or the Summary Update tab for this issue instead.";
+      els.content.appendChild(notice);
+      return;
+    }
+
     els.content.appendChild(buildGetDataPanel());
 
     const form = document.createElement("div");
@@ -1558,6 +2630,17 @@
     });
 
     generate();
+
+    const sanitySection = document.createElement("div");
+    sanitySection.className = "errors-section";
+    const sanityHeading = document.createElement("div");
+    sanityHeading.className = "errors-heading";
+    sanityHeading.textContent = "Sanity";
+    sanitySection.appendChild(sanityHeading);
+    const sanityOutput = buildSanityOutputBlock();
+    sanityOutput.id = "template-sanity-output";
+    sanitySection.appendChild(sanityOutput);
+    els.content.appendChild(sanitySection);
   }
 
   // Two clean controls above the Template form: Upload Excel + Get Data.
@@ -1570,6 +2653,11 @@
     // ---- Row 1: Adobe / Yahoo / Upload Excel ----
     const row = document.createElement("div");
     row.className = "controls-row";
+
+    const projectLabel = document.createElement("label");
+    projectLabel.className = "inline-group-label";
+    projectLabel.textContent = "Project:";
+    row.appendChild(projectLabel);
 
     buildProjectRadios().forEach((label) => row.appendChild(label));
 
@@ -1711,6 +2799,17 @@
         applied.push(...referenceApplied);
         problems.push(...referenceNotes);
 
+        // Reflow (1.4.10) and Resize Text (1.4.4) are tested via plain browser
+        // zoom, not axe DevTools/keyboard/screen reader — override the
+        // Testing Tool field accordingly (this also drives Yahoo's
+        // "Test Method:" line, since both projects share the same tool field).
+        const scForTool = extractScCode(pageData.checkpoint);
+        const toolInput = form.querySelector('[data-key="tool"]');
+        if (toolInput && (scForTool === "1.4.10" || scForTool === "1.4.4")) {
+          toolInput.value = "Chrome using Windows";
+          applied.push("tool (Reflow/Resize Text override)");
+        }
+
         // Steps to Reproduce: swap the quoted "Description here" placeholder for
         // the pulled Summary (the technical rule text) — falls back to Description if Summary is empty.
         const stepsInput = form.querySelector('[data-key="steps"]');
@@ -1788,10 +2887,14 @@
           throw new Error("No active browser tab found \u2014 click on the auditor page, then try again.");
         }
 
+        let finalDetailsText = fixSingleQuotesInSteps(output.value || "");
+        const stepInsertion = autoInsertStepOneIfMissing(finalDetailsText);
+        finalDetailsText = fixStepsNumberingInDetails(stepInsertion.text, 1);
+
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: pageWriter,
-          args: [updatedTitleInput.value || "", output.value || ""],
+          args: [updatedTitleInput.value || "", finalDetailsText],
         });
         const result = results && results[0] ? results[0].result : null;
         if (!result) throw new Error("Could not write to the page.");
@@ -1800,7 +2903,25 @@
           result.summaryOk ? "Summary filled" : "Summary field (#summary) not found",
           result.detailsOk ? "Details filled" : "Details field (#details) not found",
         ];
+        if (stepInsertion.changed) {
+          parts.push(
+            `Step 1 didn't open the URL \u2014 inserted "1. ${stepInsertion.stepText}" automatically (${stepInsertion.issueType} issue type)`
+          );
+        }
         setStatus(statusMsg, parts.join(", ") + ".", !result.summaryOk || !result.detailsOk);
+
+        if (result.summaryOk && result.detailsOk) {
+          output.value = finalDetailsText;
+          const sanityOutput = document.getElementById("template-sanity-output");
+          if (sanityOutput) {
+            scheduleSanityCheck({
+              project: templateState.project,
+              summaryEl: updatedTitleInput,
+              detailsEl: output,
+              outputEl: sanityOutput,
+            });
+          }
+        }
       } catch (err) {
         setStatus(statusMsg, "Error logging issue: " + err.message, true);
       }

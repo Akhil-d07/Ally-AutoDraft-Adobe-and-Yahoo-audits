@@ -11,6 +11,9 @@
   --radius: 8px;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  /* Minimum interactive target size (WCAG 2.5.8) applied to every button,
+     checkbox, and clickable control in this UI. */
+  --target: 24px;
 }
 
 * { box-sizing: border-box; }
@@ -21,7 +24,7 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 #app {
@@ -35,7 +38,7 @@ html, body {
 .app-header {
   background: #14181f;
   color: #fff;
-  padding: 14px 18px;
+  padding: 8px 14px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -44,7 +47,7 @@ html, body {
 }
 
 .app-header h1 {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
   margin: 0;
@@ -52,19 +55,19 @@ html, body {
 }
 
 .app-header .subtitle {
-  font-size: 18.6px;
-  color: #fff;
-  margin-top: 2px;
+  font-size: 10.5px;
+  color: #b8bfcc;
+  margin-top: 1px;
   text-align: center;
 }
 
 /* ---------- Mode tabs ---------- */
 .tabs {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
-  padding: 8px 14px 0;
+  padding: 6px 10px 0;
   flex-shrink: 0;
 }
 
@@ -74,9 +77,10 @@ html, body {
   border-bottom: none;
   background: transparent;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  padding: 9px 16px;
+  padding: 8px 12px;
+  min-height: var(--target);
   border-radius: 6px 6px 0 0;
   cursor: pointer;
 }
@@ -98,32 +102,60 @@ html, body {
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 10px;
 }
 
 .selector-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 16px;
+  gap: 3px;
+  margin-bottom: 8px;
 }
 
 .selector-row label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
+/* Label + control on a single line (Device Type dropdown, Project radios),
+   instead of the stacked label-above-control layout selector-row uses. */
+.inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.inline-row label,
+.inline-group-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Overrides the global select { width: 100% } rule so the dropdown sits
+   naturally next to its label instead of stretching the whole row. */
+.inline-select {
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+
 select, input[type="text"] {
   width: 100%;
-  padding: 9px 10px;
+  padding: 6px 8px;
+  min-height: var(--target);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   color: var(--text);
-  font-size: 13px;
+  font-size: 12.5px;
   font-family: var(--sans);
 }
 
@@ -132,11 +164,35 @@ select:focus, input[type="text"]:focus, textarea:focus {
   outline-offset: 1px;
 }
 
+/* Native checkbox/radio boxes are usually well under the 24x24 target size —
+   size them explicitly rather than relying on the browser default. Radios
+   are wrapped in large clickable labels elsewhere in the UI, so they don't
+   strictly need to hit 24px themselves, but are bumped up for visual
+   consistency with the checkboxes. */
+input[type="checkbox"] {
+  width: var(--target);
+  height: var(--target);
+  min-width: var(--target);
+  min-height: var(--target);
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
 .count-badge {
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--text-dim);
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .count-badge.status-error {
@@ -153,17 +209,17 @@ select:focus, input[type="text"]:focus, textarea:focus {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 14px;
-  margin-bottom: 14px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
 }
 
 .errors-heading {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 /* ---------- Field blocks ---------- */
@@ -171,7 +227,7 @@ select:focus, input[type="text"]:focus, textarea:focus {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   overflow: hidden;
 }
 
@@ -179,13 +235,14 @@ select:focus, input[type="text"]:focus, textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 5px 10px;
+  min-height: var(--target);
   background: #fafbfc;
   border-bottom: 1px solid var(--border);
 }
 
 .field-block .field-header span {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-dim);
   text-transform: uppercase;
@@ -197,9 +254,14 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--accent);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   padding: 5px 12px;
+  min-height: var(--target);
+  min-width: var(--target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 6px;
   cursor: pointer;
 }
@@ -216,12 +278,12 @@ select:focus, input[type="text"]:focus, textarea:focus {
 
 .field-block textarea, .field-block .field-text {
   width: 100%;
-  min-height: 70px;
+  min-height: 56px;
   border: none;
-  padding: 10px 12px;
+  padding: 8px 10px;
   font-family: var(--sans);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.45;
   color: var(--text);
   resize: vertical;
   background: transparent;
@@ -231,51 +293,52 @@ select:focus, input[type="text"]:focus, textarea:focus {
 
 /* ---------- Template mode ---------- */
 .template-notice {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-dim);
   background: var(--accent-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
-  margin-bottom: 14px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
 }
 
 .template-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .template-field label {
   display: block;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-dim);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .template-field textarea,
 .template-field input[type="text"] {
   width: 100%;
-  padding: 9px 10px;
+  padding: 6px 8px;
+  min-height: var(--target);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   color: var(--text);
-  font-size: 13px;
+  font-size: 12.5px;
   font-family: var(--sans);
-  min-height: 56px;
+  min-height: 44px;
   resize: vertical;
 }
 
 .template-field input[type="text"] {
-  min-height: auto;
+  min-height: var(--target);
 }
 
 .template-actions {
   display: flex;
-  gap: 8px;
-  margin: 14px 0;
+  gap: 6px;
+  margin: 8px 0;
 }
 
 .primary-btn {
@@ -283,9 +346,10 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border: none;
   background: var(--accent);
   color: #fff;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-  padding: 10px 18px;
+  padding: 7px 16px;
+  min-height: var(--target);
   border-radius: var(--radius);
   cursor: pointer;
 }
@@ -295,38 +359,38 @@ select:focus, input[type="text"]:focus, textarea:focus {
 .template-output {
   white-space: pre-wrap;
   font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.55;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px;
-  min-height: 120px;
+  padding: 10px;
+  min-height: 90px;
 }
 
 .template-output-edit {
   width: 100%;
-  min-height: 300px;
+  min-height: 220px;
   resize: vertical;
   color: var(--text);
 }
 
 .empty-state {
   color: var(--text-dim);
-  font-size: 13px;
-  padding: 24px 4px;
+  font-size: 12.5px;
+  padding: 16px 4px;
   text-align: center;
 }
 
 /* ---------- Template tab controls (Upload Excel + Get Data) ---------- */
 .controls-panel {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .controls-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 24px;
+  gap: 10px;
   align-items: flex-start;
 }
 
@@ -334,11 +398,11 @@ select:focus, input[type="text"]:focus, textarea:focus {
 .upload-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .controls-row + .controls-row {
-  margin-top: 24px;
+  margin-top: 10px;
 }
 
 /* Unified action buttons: Get Data / Log Issue / Clear */
@@ -347,9 +411,10 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border: none;
   background: var(--accent);
   color: #fff;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-  padding: 10px 18px;
+  padding: 7px 16px;
+  min-height: var(--target);
   border-radius: var(--radius);
   cursor: pointer;
 }
@@ -361,12 +426,14 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-  padding: 10px 18px;
+  padding: 7px 16px;
+  min-height: var(--target);
   border-radius: var(--radius);
   cursor: pointer;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
 }
 
 .upload-btn:hover {
@@ -377,8 +444,8 @@ select:focus, input[type="text"]:focus, textarea:focus {
 .excel-info {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 11.5px;
   color: var(--text-dim);
 }
 
@@ -387,12 +454,18 @@ select:focus, input[type="text"]:focus, textarea:focus {
 }
 
 .excel-info .remove-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 2px 8px;
+  border-radius: 6px;
   color: var(--accent);
   font-weight: 600;
   cursor: pointer;
 }
 
 .excel-info .remove-link:hover {
+  background: var(--accent-dim);
   text-decoration: underline;
 }
 
