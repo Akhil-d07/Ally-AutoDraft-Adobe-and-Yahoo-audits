@@ -51,6 +51,7 @@
     else if (state.mode === "TEMPLATE") renderTemplateMode();
     else if (state.mode === "SUMMARY_UPDATE") renderSummaryUpdateMode();
     else if (state.mode === "CSV_SANITY") renderCsvSanityMode();
+    else if (state.mode === "JIRA_STATUS") renderJiraStatusMode();
   }
 
   // ---------- Manual mode (list + lookup) ----------
@@ -1100,9 +1101,23 @@
         ? `Authentication State is "${raw}" \u2014 must be "Logged In" or "Logged Out".`
         : "Authentication State line is empty.",
       // No deterministic single correct value here (either state could be the
-      // real one), so this is informational only — no auto-"fix" offered.
-      suggestedText: 'Authentication State: "Logged In" or "Logged Out"',
+      // real one) — needsInput renders an editable field instead of a fixed
+      // one-click fix, so the user picks/types the actual value themselves.
+      needsInput: {
+        target: "details",
+        apply: (text, other, userValue) => replaceAuthenticationStateLine(text, userValue),
+      },
+      inputDefault: "Logged In",
+      inputPlaceholder: 'Type "Logged In" or "Logged Out"',
     };
+  }
+
+  // Replaces (or, if the header is entirely missing, leaves untouched) the
+  // "Authentication State:" line with the user-provided value.
+  function replaceAuthenticationStateLine(detailsText, newValue) {
+    const str = String(detailsText || "");
+    if (!/authentication\s*state\s*:/i.test(str)) return str;
+    return str.replace(/authentication\s*state\s*:\s*.*/i, `Authentication State: ${String(newValue || "").trim()}`);
   }
 
   // Determines Screen Reader / Keyboard / Other from the Context section's
@@ -1156,15 +1171,16 @@
   }
 
   // Determines the exact Step 1 wording an issue is required to have:
-  //   - Reflow (1.4.10) / Resize Text (1.4.4): tested via plain browser
-  //     zoom, not AT — Step 1 must be "Open the chrome browser".
+  //   - Reflow (1.4.10) / Resize Text (1.4.4) / Text Spacing (1.4.12): tested
+  //     via plain browser zoom, not AT — Step 1 must be "Open the chrome
+  //     browser".
   //   - Issues with AT (Screen Reader): Step 1 must be "Turn on the screen
   //     reader and open the above-mentioned URL."
   //   - Everything else (Keyboard/no AT): Step 1 must be "Open the
   //     above-mentioned URL."
   function determineStepOneRequirement(detailsText, checkpointText) {
     const scCode = extractScCode(checkpointText);
-    if (scCode === "1.4.10" || scCode === "1.4.4") {
+    if (scCode === "1.4.10" || scCode === "1.4.4" || scCode === "1.4.12") {
       return { category: "browser-only", expectedText: "Open the chrome browser." };
     }
     const issueType = determineIssueTypeFromContext(detailsText);
@@ -1257,14 +1273,63 @@
     return { ok: true, detail: "" };
   }
 
+  // Resource Link's own convention (corrected from an earlier version of this
+  // check): bullets start immediately after "Resource Link:" with no blank
+  // line, but there SHOULD be exactly one blank line between the last bullet
+  // and "Screen Name:" — matching the single-blank-line convention every
+  // other section transition in the report already uses.
+  function checkResourceLinkSpacing(detailsText) {
+    const str = String(detailsText || "");
+    if (!/resource link:/i.test(str)) return { ok: true, detail: "" };
+
+    const problems = [];
+    if (/resource link:[ \t]*\n([ \t]*\n)+/i.test(str)) {
+      problems.push('blank line right after "Resource Link:" (bullets should start immediately)');
+    }
+
+    const screenGapMatch = str.match(/\n([ \t]*\n)*(?=[ \t]*screen name:)/i);
+    if (screenGapMatch) {
+      const newlineCount = (screenGapMatch[0].match(/\n/g) || []).length;
+      if (newlineCount !== 2) {
+        problems.push(
+          newlineCount < 2
+            ? "missing the blank line between the last Resource Link URL and Screen Name:"
+            : "extra blank line(s) between the last Resource Link URL and Screen Name: (should be exactly one)"
+        );
+      }
+    }
+
+    if (!problems.length) return { ok: true, detail: "" };
+    return {
+      ok: false,
+      detail: `Resource Link spacing: ${problems.join("; ")}.`,
+      suggestedText: "(no blank line after \"Resource Link:\"; exactly one blank line before \"Screen Name:\")",
+      fix: {
+        target: "details",
+        apply: (text) => {
+          let t = String(text || "");
+          t = t.replace(/(resource link:)[ \t]*\n([ \t]*\n)+/i, "$1\n");
+          t = t.replace(/\n([ \t]*\n)*(?=[ \t]*screen name:)/i, "\n\n");
+          return t;
+        },
+      },
+    };
+  }
+
   // Accepts either dot- or underscore-separated numbers after "WCAG" (e.g.
   // "WCAG_1.4.3-..." or "WCAG_1_4_3-...") and always normalizes the captured
   // number to dot-separated, so a difference in separator style alone can't
   // cause a false mismatch (or a false match) against extractWcagScField's
   // always-dotted output. Also captures the "-Name_Suffix" part (if any) so a
   // corrected label can be suggested without losing the existing name.
+  // The suffix character class includes "-" (not just "_") because some
+  // names have multiple dash-separated words (e.g. "Non-text_Contrast") —
+  // without it, the match truncates at the second dash, which both produces
+  // a false "doesn't match" failure AND (since the fix's replace() only
+  // touches the truncated match) leaves the real remainder as duplicated
+  // leftover text on every "Correct" click.
   function extractWcagLabel(detailsText) {
-    const m = String(detailsText || "").match(/WCAG[_-]?(\d+)[._](\d+)[._](\d+)([-_][A-Za-z0-9_]*)?/i);
+    const m = String(detailsText || "").match(/WCAG[_-]?(\d+)[._](\d+)[._](\d+)([-_][A-Za-z0-9_-]*)?/i);
     if (!m) return null;
     return { raw: m[0], number: `${m[1]}.${m[2]}.${m[3]}`, suffix: m[4] || "" };
   }
@@ -1398,7 +1463,7 @@
         suggestedText: expectedLabel,
         fix: {
           target: "details",
-          apply: (text) => text.replace(/WCAG[_-]?\d+[._]\d+[._]\d+([-_][A-Za-z0-9_]*)?/i, expectedLabel),
+          apply: (text) => text.replace(/WCAG[_-]?\d+[._]\d+[._]\d+([-_][A-Za-z0-9_-]*)?/i, expectedLabel),
         },
       };
     }
@@ -1554,6 +1619,9 @@
       ok: authCheck.ok,
       detail: authCheck.detail,
       suggestedText: authCheck.suggestedText,
+      needsInput: authCheck.needsInput,
+      inputDefault: authCheck.inputDefault,
+      inputPlaceholder: authCheck.inputPlaceholder,
     });
 
     const stepOneUrlCheck = checkStepOneOpensUrl(detailsText, checkpointText);
@@ -1591,6 +1659,15 @@
       detail: resourceLinkCheck.detail,
       suggestedText: resourceLinkCheck.suggestedText,
       fix: resourceLinkCheck.fix,
+    });
+
+    const resourceLinkSpacingCheck = checkResourceLinkSpacing(detailsText);
+    results.push({
+      name: "Resource Link: Spacing before Screen Name",
+      ok: resourceLinkSpacingCheck.ok,
+      detail: resourceLinkSpacingCheck.detail,
+      suggestedText: resourceLinkSpacingCheck.suggestedText,
+      fix: resourceLinkSpacingCheck.fix,
     });
 
     if (project !== "yahoo") {
@@ -1687,6 +1764,28 @@
       row.style.gap = "6px";
       row.style.margin = "2px 0";
 
+      // Some checks (e.g. Authentication State) have no single deterministic
+      // correct value — only a human can say which one is right. For these,
+      // build the fix around a live text input's value instead of a fixed
+      // apply() computed ahead of time, so "Correct" uses whatever the user
+      // actually typed at the moment they click it.
+      let inputEl = null;
+      if (r.needsInput && !r.fix) {
+        inputEl = document.createElement("input");
+        inputEl.type = "text";
+        inputEl.value = r.inputDefault || "";
+        inputEl.placeholder = r.inputPlaceholder || "";
+        inputEl.style.fontSize = "11.5px";
+        inputEl.style.padding = "3px 6px";
+        inputEl.style.marginTop = "2px";
+        inputEl.style.width = "100%";
+        inputEl.style.maxWidth = "220px";
+        r.fix = {
+          target: r.needsInput.target,
+          apply: (text, other) => r.needsInput.apply(text, other, inputEl.value),
+        };
+      }
+
       if (r.fix) {
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
@@ -1721,7 +1820,9 @@
       renderTextWithHighlightedQuotes(detailLine, r.detail || "See check above.", true);
       textCol.appendChild(detailLine);
 
-      if (r.suggestedText) {
+      if (inputEl) {
+        textCol.appendChild(inputEl);
+      } else if (r.suggestedText) {
         const suggestLine = document.createElement("div");
         suggestLine.className = "count-badge status-error";
         suggestLine.style.margin = "0";
@@ -1782,7 +1883,7 @@
   // (kept in sync with the page) or a plain `{ value }` holder. customPrefix,
   // if provided, means Summary Format is checked against ONLY that custom
   // pattern instead of the normal Adobe/Yahoo convention.
-  async function runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix }) {
+  async function runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean }) {
     try {
       const tab = await getTargetTab();
       if (!tab || !tab.id) throw new Error("No active browser tab found.");
@@ -1802,8 +1903,13 @@
         customPrefix,
       });
       renderSanityResults(outputEl, checks, {
-        onCorrect: (selected) => applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix }),
+        onCorrect: (selected) =>
+          applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix, onClean }),
       });
+      // "Clean" means every check passed on THIS run — whether that's the very
+      // first run right after Update, or a later run after Correct fixed
+      // everything. onClean is optional; only the Summary Update tab uses it.
+      if (onClean && checks.every((c) => c.ok)) onClean();
     } catch (err) {
       outputEl.innerHTML = "";
       const errLine = document.createElement("div");
@@ -1816,12 +1922,38 @@
   // Applies the fixes for just the checked failed items, writes the
   // corrected Summary/Details back to the live page, syncs summaryEl/detailsEl
   // to match, then immediately re-runs Sanity so the panel reflects the fix.
-  async function applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix }) {
+  async function applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix, onClean }) {
+    const tab = await getTargetTab();
+    if (!tab || !tab.id) throw new Error("No active browser tab found.");
+
+    // Re-read the live page and re-run every check fresh before applying
+    // anything. If the user clicks Correct again after a check has already
+    // been resolved (by a prior Correct, or by anything else), this skips
+    // reapplying its fix instead of blindly running it a second time.
+    const liveResults = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: sanityPageExtractor });
+    const liveData = liveResults && liveResults[0] ? liveResults[0].result : {};
+    const freshChecks = await runSanityChecks({
+      project,
+      summaryText: summaryEl.value,
+      detailsText: detailsEl.value,
+      screenshotFound: liveData.screenshotFound,
+      hasScreenshot: liveData.hasScreenshot,
+      severityText: liveData.severity,
+      checkpointText: liveData.checkpoint,
+      customPrefix,
+    });
+
     let summaryText = summaryEl.value;
     let detailsText = detailsEl.value;
+    const skipped = [];
 
     selected.forEach((r) => {
       if (!r.fix) return;
+      const stillFailing = freshChecks.find((c) => c.name === r.name && !c.ok);
+      if (!stillFailing) {
+        skipped.push(r.name);
+        return;
+      }
       if (r.fix.target === "summary") {
         summaryText = r.fix.apply(summaryText, detailsText);
       } else {
@@ -1829,8 +1961,6 @@
       }
     });
 
-    const tab = await getTargetTab();
-    if (!tab || !tab.id) throw new Error("No active browser tab found.");
     const writeResults = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: pageWriter,
@@ -1842,20 +1972,24 @@
     summaryEl.value = summaryText;
     detailsEl.value = detailsText;
 
-    await runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix });
+    if (skipped.length) {
+      console.log("Correct: skipped already-resolved check(s):", skipped.join(", "));
+    }
+
+    await runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean });
   }
 
   // Kicks off the first Sanity run 1 second after a write (giving the page a
   // moment to settle), against whatever's currently in summaryEl.value/
   // detailsEl.value.
-  function scheduleSanityCheck({ project, summaryEl, detailsEl, outputEl, customPrefix }) {
+  function scheduleSanityCheck({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean }) {
     outputEl.innerHTML = "";
     const waitingLine = document.createElement("div");
     waitingLine.className = "count-badge";
     waitingLine.textContent = "Performing sanity for this issue\u2026 (waiting for the page to update)";
     outputEl.appendChild(waitingLine);
     setTimeout(() => {
-      runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix });
+      runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean });
     }, 1000);
   }
 
@@ -2684,6 +2818,27 @@
     applyBtn.type = "button";
     applyBtn.textContent = "Update";
     applyRow.appendChild(applyBtn);
+
+    // When checked, a fully-clean Sanity result (either immediately after
+    // Update, or after Correct fixes everything) automatically clears this
+    // tab so it's ready for the next issue \u2014 without closing this window.
+    // The user works the next real issue in a separate, already-open copy of
+    // the tool/extension; this instance just resets its own fields.
+    const addAnotherLabel = document.createElement("label");
+    addAnotherLabel.style.display = "inline-flex";
+    addAnotherLabel.style.alignItems = "center";
+    addAnotherLabel.style.gap = "4px";
+    addAnotherLabel.style.fontSize = "11.5px";
+    addAnotherLabel.style.fontWeight = "600";
+    addAnotherLabel.style.color = "var(--text-dim)";
+    addAnotherLabel.style.cursor = "pointer";
+
+    const addAnotherCheckbox = document.createElement("input");
+    addAnotherCheckbox.type = "checkbox";
+    addAnotherLabel.appendChild(addAnotherCheckbox);
+    addAnotherLabel.appendChild(document.createTextNode("Add another issue"));
+    applyRow.appendChild(addAnotherLabel);
+
     els.content.appendChild(applyRow);
 
     const sanitySection = document.createElement("div");
@@ -3027,7 +3182,7 @@
       }
     });
 
-    clearBtn.addEventListener("click", () => {
+    function clearAllForSummaryUpdate() {
       lastExtracted = null;
       originalSummary = null;
       lastParsedContext = null;
@@ -3042,7 +3197,9 @@
       setStatus(stepsCheckMsg, "", false);
       setStatus(remediationCheckMsg, "", false);
       setStatus(summaryDataCheckMsg, "", false);
-    });
+    }
+
+    clearBtn.addEventListener("click", clearAllForSummaryUpdate);
 
     applyBtn.addEventListener("click", async () => {
       if (!isExtension) {
@@ -3127,6 +3284,13 @@
             detailsEl: { value: detailsToWrite },
             outputEl: sanityOutput,
             customPrefix: summaryCustomPrefixManager ? summaryCustomPrefixManager.getActivePrefix() : null,
+            onClean: () => {
+              if (!addAnotherCheckbox.checked) return;
+              setStatus(statusMsg, "No sanity errors identified. Clearing for the next issue in 2 seconds\u2026", false);
+              setTimeout(() => {
+                clearAllForSummaryUpdate();
+              }, 2000);
+            },
           });
         }
       } catch (err) {
@@ -3416,15 +3580,16 @@
         applied.push(...referenceApplied);
         problems.push(...referenceNotes);
 
-        // Reflow (1.4.10) and Resize Text (1.4.4) are tested via plain browser
-        // zoom, not axe DevTools/keyboard/screen reader — override the
-        // Testing Tool field accordingly (this also drives Yahoo's
-        // "Test Method:" line, since both projects share the same tool field).
+        // Reflow (1.4.10), Resize Text (1.4.4), and Text Spacing (1.4.12) are
+        // tested via plain browser zoom, not axe DevTools/keyboard/screen
+        // reader — override the Testing Tool field accordingly (this also
+        // drives Yahoo's "Test Method:" line, since both projects share the
+        // same tool field).
         const scForTool = extractScCode(pageData.checkpoint);
         const toolInput = form.querySelector('[data-key="tool"]');
-        if (toolInput && (scForTool === "1.4.10" || scForTool === "1.4.4")) {
+        if (toolInput && (scForTool === "1.4.10" || scForTool === "1.4.4" || scForTool === "1.4.12")) {
           toolInput.value = "Chrome using Windows";
-          applied.push("tool (Reflow/Resize Text override)");
+          applied.push("tool (Reflow/Resize Text/Text Spacing override)");
         }
 
         // Steps to Reproduce: swap the quoted "Description here" placeholder for
@@ -3741,6 +3906,7 @@
     { key: "yahoo-native", label: "Yahoo Native", project: "yahoo", platform: "native", nativeTag: "Win/Mac/Both" },
     { key: "yahoo-native-ios", label: "Yahoo Native iOS", project: "yahoo", platform: "native", nativeTag: "iOS" },
     { key: "yahoo-native-android", label: "Yahoo Native Android", project: "yahoo", platform: "native", nativeTag: "Android" },
+    { key: "jira-sanity", label: "JIRA Sanity", isJira: true },
   ];
 
   function getCsvSanityMode(key) {
@@ -3795,6 +3961,179 @@
     const dataRows = rows.filter((r) => r.some((cell) => String(cell || "").trim().length));
     return { headers, rows: dataRows };
   }
+
+  // ---------- JIRA Status (club status files + compare against JIRA/auditor exports) ----------
+
+  // Same quote-aware parsing as parseCsv, but auto-detects comma vs. tab as
+  // the delimiter (some JIRA exports are tab-delimited despite the .csv
+  // extension — comparing raw tab/comma counts on the header line is a
+  // reliable, cheap signal for which one is actually in use).
+  function parseDelimitedText(text, forcedDelimiter) {
+    const str = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    let delimiter = forcedDelimiter;
+    if (!delimiter) {
+      const firstLine = str.split("\n", 1)[0] || "";
+      const tabCount = (firstLine.match(/\t/g) || []).length;
+      const commaCount = (firstLine.match(/,/g) || []).length;
+      delimiter = tabCount > commaCount ? "\t" : ",";
+    }
+
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < str.length; i++) {
+      const c = str[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (str[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += c;
+        }
+      } else if (c === '"') {
+        inQuotes = true;
+      } else if (c === delimiter) {
+        row.push(field);
+        field = "";
+      } else if (c === "\n") {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else {
+        field += c;
+      }
+    }
+    if (field.length || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+
+    const headers = (rows.shift() || []).map((h) => String(h || "").trim());
+    const dataRows = rows.filter((r) => r.some((cell) => String(cell || "").trim().length));
+    return { headers, rows: dataRows, delimiter };
+  }
+
+  // Reads an uploaded File (xlsx/xls via SheetJS, csv/tsv/txt via
+  // parseDelimitedText) and returns { headers, rows }, regardless of which
+  // format it turns out to be — status files can come down as either.
+  async function readUploadedTableFile(file) {
+    const name = (file.name || "").toLowerCase();
+    if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+      if (typeof XLSX === "undefined") throw new Error("xlsx.full.min.js not loaded \u2014 can't read Excel files.");
+      const buf = await file.arrayBuffer();
+      const workbook = XLSX.read(buf, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      const headers = (rows.shift() || []).map((h) => String(h || "").trim());
+      const dataRows = rows.filter((r) => r.some((cell) => String(cell || "").trim().length));
+      return { headers, rows: dataRows };
+    }
+    const text = await file.text();
+    const parsed = parseDelimitedText(text);
+    return { headers: parsed.headers, rows: parsed.rows };
+  }
+
+  // Locates the 6 fixed status-file columns by name (case-insensitive) —
+  // this file format is generated consistently by one internal tool, unlike
+  // JIRA/auditor exports, so hardcoding these exact names is reasonable here.
+  function detectStatusColumns(headers) {
+    const norm = headers.map((h) => String(h || "").trim().toLowerCase());
+    const findIdx = (name) => norm.findIndex((h) => h === name);
+    return {
+      auditorId: findIdx("auditor issue id"),
+      auditorUrl: findIdx("auditor issue url"),
+      comments: findIdx("comments"),
+      jiraId: findIdx("jira issue id"),
+      jiraUrl: findIdx("jira issue url"),
+      status: findIdx("status"),
+    };
+  }
+
+  // Flags: (a) the same JIRA ID assigned to more than one distinct Auditor
+  // ID, (b) the same Auditor ID assigned to more than one distinct JIRA ID
+  // (the mirror-image mistake), and (c) any row whose Status isn't
+  // "Success". Works against a single file's rows OR a combined multi-file
+  // set alike (cross-file duplicates are exactly the ones a per-file-only
+  // check would miss).
+  function validateStatusRows(cols, rows) {
+    const byJira = {};
+    const byAuditor = {};
+    const failed = [];
+
+    rows.forEach((r) => {
+      const jiraId = cols.jiraId !== -1 ? String(r.row[cols.jiraId] || "").trim() : "";
+      const auditorId = cols.auditorId !== -1 ? String(r.row[cols.auditorId] || "").trim() : "";
+      const status = cols.status !== -1 ? String(r.row[cols.status] || "").trim() : "";
+
+      if (jiraId) {
+        if (!byJira[jiraId]) byJira[jiraId] = [];
+        byJira[jiraId].push(r);
+      }
+      if (auditorId) {
+        if (!byAuditor[auditorId]) byAuditor[auditorId] = [];
+        byAuditor[auditorId].push(r);
+      }
+      if (status && status.toLowerCase() !== "success") {
+        failed.push({ ...r, status });
+      }
+    });
+
+    const duplicateJiraIds = Object.entries(byJira)
+      .filter(([, entries]) => new Set(entries.map((e) => String(e.row[cols.auditorId] || "").trim())).size > 1)
+      .map(([jiraId, entries]) => ({ jiraId, entries }));
+
+    const duplicateAuditorIds = Object.entries(byAuditor)
+      .filter(([, entries]) => new Set(entries.map((e) => String(e.row[cols.jiraId] || "").trim())).size > 1)
+      .map(([auditorId, entries]) => ({ auditorId, entries }));
+
+    return { duplicateJiraIds, duplicateAuditorIds, failed };
+  }
+
+  // Triggers a real file download (XLSX) for the given headers/rows — used
+  // for the clubbed status file. Uses SheetJS, already loaded for reading.
+  function downloadAsXlsx(filename, headers, rows) {
+    if (typeof XLSX === "undefined") {
+      throw new Error("xlsx.full.min.js not loaded \u2014 can't generate a download.");
+    }
+    const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
+    XLSX.writeFile(workbook, filename);
+  }
+
+  // Loose text similarity (0-1) via word-overlap — used to compare an
+  // auditor issue's Summary against its linked JIRA ticket's Summary. Exact
+  // string equality is too strict here since summaries are commonly reworded
+  // when logged (e.g. an "Accessibility - " prefix gets added, wording gets
+  // cleaned up) — this only needs to catch genuinely UNRELATED summaries
+  // (the duplicate/mismatched-linking bug), not stylistic differences.
+  function textSimilarity(a, b) {
+    const words = (s) =>
+      new Set(
+        String(s || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, " ")
+          .split(/\s+/)
+          .filter((w) => w.length > 2)
+      );
+    const wa = words(a);
+    const wb = words(b);
+    if (!wa.size || !wb.size) return 0;
+    let overlap = 0;
+    wa.forEach((w) => {
+      if (wb.has(w)) overlap++;
+    });
+    return overlap / Math.max(wa.size, wb.size);
+  }
+
+
 
   // Finds which CSV column (by index) holds each field the rule set needs,
   // matching header names loosely (case-insensitive substring), most
@@ -4388,6 +4727,1344 @@
     renderCsvFailuresByType(container, rowResults);
   }
 
+  // ---------- JIRA Sanity (separate ruleset from the axe-Auditor CSV checks
+  // above — validates JIRA ticket exports instead, entirely via user-defined
+  // custom column checks; column names/values vary too much per project to
+  // hardcode any fixed rules here). ----------
+
+  // Renders the JIRA Sanity results table + Flagged Issues Summary, built
+  // with DOM nodes (not innerHTML) since CSV cell content is untrusted text.
+  function renderJiraResults(container, rowResults) {
+    container.innerHTML = "";
+
+    const passedCount = rowResults.filter((r) => r.checks.every((c) => c.ok)).length;
+    const summary = document.createElement("div");
+    summary.className = "count-badge";
+    summary.textContent = `${passedCount}/${rowResults.length} issues passed all checks.`;
+    container.appendChild(summary);
+
+    const codes = rowResults.length ? rowResults[0].checks.map((c) => c.code) : [];
+    const codeNames = rowResults.length ? rowResults[0].checks.map((c) => c.name) : [];
+
+    if (codes.length) {
+      const legend = document.createElement("div");
+      legend.className = "count-badge";
+      legend.style.marginTop = "4px";
+      legend.textContent = "Legend: " + codes.map((code, i) => `${code} = ${codeNames[i]}`).join("  \u2022  ");
+      container.appendChild(legend);
+    }
+
+    const table = document.createElement("table");
+    table.style.width = "100%";
+    table.style.borderCollapse = "collapse";
+    table.style.fontSize = "12px";
+    table.style.marginTop = "8px";
+
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    ["Issue ID", "Summary", ...codes].forEach((label, i) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      const nameIdx = i - 2;
+      if (nameIdx >= 0 && codeNames[nameIdx]) th.title = codeNames[nameIdx];
+      th.style.padding = "4px";
+      th.style.borderBottom = "1px solid var(--border)";
+      th.style.textAlign = label === "Issue ID" || label === "Summary" ? "left" : "center";
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    rowResults.forEach((r) => {
+      const tr = document.createElement("tr");
+
+      const idCell = document.createElement("td");
+      if (r.issueUrl) {
+        const link = document.createElement("a");
+        link.href = r.issueUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = r.issueId || String(r.rowIndex);
+        idCell.appendChild(link);
+      } else {
+        idCell.textContent = r.issueId || String(r.rowIndex);
+      }
+      idCell.style.padding = "4px";
+      idCell.style.borderBottom = "1px solid var(--border)";
+      tr.appendChild(idCell);
+
+      const summaryCell = document.createElement("td");
+      summaryCell.textContent = (r.summary || "").slice(0, 40);
+      summaryCell.style.padding = "4px";
+      summaryCell.style.borderBottom = "1px solid var(--border)";
+      tr.appendChild(summaryCell);
+
+      r.checks.forEach((c) => {
+        const td = document.createElement("td");
+        td.textContent = c.ok ? "\u2705" : "\u274C";
+        td.title = c.detail || "";
+        td.style.padding = "4px";
+        td.style.textAlign = "center";
+        td.style.borderBottom = "1px solid var(--border)";
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    container.appendChild(table);
+
+    const flagged = rowResults.filter((r) => r.checks.some((c) => !c.ok));
+    if (flagged.length) {
+      const heading = document.createElement("div");
+      heading.style.marginTop = "10px";
+      heading.style.fontWeight = "700";
+      heading.style.fontSize = "12px";
+      heading.textContent = "Flagged Issues Summary";
+      container.appendChild(heading);
+
+      flagged.forEach((r) => {
+        const item = document.createElement("div");
+        item.style.marginTop = "4px";
+        item.style.fontSize = "12px";
+        const failed = r.checks.filter((c) => !c.ok);
+        const detailText = failed.map((c) => `${c.code} ${c.name} \u2014 ${c.detail}`).join("; ");
+        const strong = document.createElement("strong");
+        if (r.issueUrl) {
+          const link = document.createElement("a");
+          link.href = r.issueUrl;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = r.issueId || r.rowIndex;
+          strong.appendChild(link);
+        } else {
+          strong.textContent = r.issueId || r.rowIndex;
+        }
+        item.appendChild(strong);
+        item.appendChild(document.createTextNode(` (${(r.summary || "").slice(0, 50)}): ${detailText}`));
+        container.appendChild(item);
+      });
+    }
+  }
+
+  function buildJiraReportMarkdown(rowResults) {
+    const checkNames = rowResults.length ? rowResults[0].checks.map((c) => `${c.code} ${c.name}`) : [];
+    const header = ["Issue ID", "Summary", ...checkNames];
+    const lines = [];
+    lines.push(`| ${header.join(" | ")} |`);
+    lines.push(`| ${header.map(() => "---").join(" | ")} |`);
+
+    rowResults.forEach((r) => {
+      const idLabel = r.issueId || String(r.rowIndex);
+      const idCell = r.issueUrl ? `[${idLabel}](${r.issueUrl})` : idLabel;
+      const cells = [idCell, (r.summary || "").slice(0, 40).replace(/\|/g, "/")];
+      r.checks.forEach((c) => {
+        cells.push(c.ok ? "\u2705" : `\u274C ${c.detail}`.replace(/\|/g, "/"));
+      });
+      lines.push(`| ${cells.join(" | ")} |`);
+    });
+
+    lines.push("");
+    lines.push("Flagged Issues Summary");
+    lines.push("");
+    const flagged = rowResults.filter((r) => r.checks.some((c) => !c.ok));
+    if (!flagged.length) {
+      lines.push("No issues flagged \u2014 every row passed every check.");
+    } else {
+      flagged.forEach((r) => {
+        const failed = r.checks.filter((c) => !c.ok);
+        const idLabel = r.issueId || r.rowIndex;
+        const idText = r.issueUrl ? `[${idLabel}](${r.issueUrl})` : idLabel;
+        lines.push(`- Issue ${idText} (${(r.summary || "").slice(0, 50)}):`);
+        failed.forEach((c) => lines.push(`  - ${c.code} ${c.name}: ${c.detail}`));
+      });
+    }
+
+    const passedCount = rowResults.filter((r) => r.checks.every((c) => c.ok)).length;
+    lines.push("");
+    lines.push(`${passedCount}/${rowResults.length} issues passed all checks.`);
+
+    return lines.join("\n");
+  }
+
+  // Best-effort Issue ID / Summary column detection for display purposes only
+  // (not part of the C1-C4 checks themselves).
+  function detectJiraDisplayColumns(headers) {
+    const norm = headers.map((h) => String(h || "").toLowerCase());
+    const findIdx = (patterns) => {
+      for (const p of patterns) {
+        const idx = norm.findIndex((h) => h.includes(p));
+        if (idx !== -1) return idx;
+      }
+      return -1;
+    };
+    return {
+      issueId: findIdx(["issue key", "issue id", "issue_id", "ticket id", "key", "id"]),
+      summary: findIdx(["summary", "title"]),
+      issueUrl: findIdx(["issue url", "issue_url", "ticket url", "jira link", "issue link", "url"]),
+    };
+  }
+
+  // Spreadsheet-style column letters (0->A, 1->B, ..., 25->Z, 26->AA, ...)
+  // for identifying which physical column to use when a CSV has duplicate
+  // header names.
+  function columnLetterFromIndex(idx) {
+    let n = idx + 1;
+    let letters = "";
+    while (n > 0) {
+      const rem = (n - 1) % 26;
+      letters = String.fromCharCode(65 + rem) + letters;
+      n = Math.floor((n - 1) / 26);
+    }
+    return letters;
+  }
+
+  function findAllColumnIndexesCI(headers, name) {
+    const norm = String(name || "").trim().toLowerCase();
+    const result = [];
+    headers.forEach((h, idx) => {
+      if (String(h || "").trim().toLowerCase() === norm) result.push(idx);
+    });
+    return result;
+  }
+
+  // Runs one user-defined custom rule against a row. resolvedIdxs is usually
+  // one column index, but can be more than one if the user selected multiple
+  // duplicate-named columns — the rule passes if ANY selected column satisfies it.
+  //   - Blank expected content -> "must not be empty" (e.g. Attachment, Summary).
+  //   - Content with a comma -> "must contain ALL listed values" (e.g. Labels
+  //     needing both "A11y_Audit_2026" and "Product=Frame_io" present).
+  //   - Otherwise -> exact match, case-sensitive.
+  function runCustomRuleCheck(rule, resolvedIdxs, row) {
+    const values = resolvedIdxs.map((idx) => String(row[idx] || "").trim());
+    let content = String(rule.content || "").trim();
+    if (content.toLowerCase() === "should not be empty") content = "";
+
+    if (!content) {
+      const ok = values.some((v) => !!v);
+      return { ok, detail: ok ? "" : `"${rule.columnName}" is empty.` };
+    }
+
+    if (content.includes(",")) {
+      const required = content
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const ok = values.some((v) => required.every((req) => v.includes(req)));
+      const missing = required.filter((req) => !values.some((v) => v.includes(req)));
+      return {
+        ok,
+        detail: ok ? "" : `Missing required value(s) in "${rule.columnName}": ${missing.join(", ")}.`,
+      };
+    }
+
+    const ok = values.some((v) => v === content);
+    return {
+      ok,
+      detail: ok ? "" : `"${rule.columnName}" is "${values[0] || "(empty)"}", expected "${content}".`,
+    };
+  }
+
+  // Parses pasted rule text in the format "Column, Content; Column, Content;
+  // ...". Only the FIRST comma in each rule separates column name from
+  // content — content itself may contain further commas (the "must contain
+  // all of these values" case), which is why rules are joined with ";" and
+  // not ",".
+  function parsePastedRules(text) {
+    const rules = [];
+    String(text || "")
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((ruleStr) => {
+        const commaIdx = ruleStr.indexOf(",");
+        if (commaIdx === -1) return;
+        const columnName = ruleStr.slice(0, commaIdx).trim();
+        const content = ruleStr.slice(commaIdx + 1).trim();
+        if (!columnName) return;
+        rules.push({ id: `rule-${Date.now()}-${Math.random()}`, columnName, content });
+      });
+    return rules;
+  }
+
+  function renderJiraSanityUi() {
+    const notice = document.createElement("div");
+    notice.className = "template-notice";
+    notice.textContent =
+      "Validates JIRA ticket exports (not axe-Auditor exports) against checks you define \u2014 paste or build a table of column/expected-content rules below, since column names and value formats vary by project. Read-only, nothing is written back.";
+    els.content.appendChild(notice);
+
+    const fileRow = document.createElement("div");
+    fileRow.className = "controls-row";
+
+    const fileGroup = document.createElement("div");
+    fileGroup.className = "upload-group";
+
+    const fileLabel = document.createElement("label");
+    fileLabel.className = "upload-btn";
+    fileLabel.setAttribute("for", "jira-sanity-input");
+    fileLabel.textContent = "Choose CSV";
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".csv";
+    fileInput.id = "jira-sanity-input";
+    fileInput.hidden = true;
+
+    const fileInfo = document.createElement("div");
+    fileInfo.className = "excel-info";
+
+    fileGroup.appendChild(fileLabel);
+    fileGroup.appendChild(fileInput);
+    fileGroup.appendChild(fileInfo);
+    fileRow.appendChild(fileGroup);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "copy-btn";
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove File";
+    removeBtn.style.display = "none";
+    fileRow.appendChild(removeBtn);
+
+    els.content.appendChild(fileRow);
+
+    const statusMsg = document.createElement("div");
+    statusMsg.className = "count-badge";
+    els.content.appendChild(statusMsg);
+
+    const mappingWrap = document.createElement("div");
+    mappingWrap.style.marginTop = "8px";
+    els.content.appendChild(mappingWrap);
+
+    const actionRow = document.createElement("div");
+    actionRow.className = "controls-row";
+    actionRow.style.display = "none";
+
+    const analyzeBtn = document.createElement("button");
+    analyzeBtn.className = "action-btn";
+    analyzeBtn.type = "button";
+    analyzeBtn.textContent = "Analyze";
+    actionRow.appendChild(analyzeBtn);
+
+    const copyReportBtn = document.createElement("button");
+    copyReportBtn.className = "copy-btn";
+    copyReportBtn.type = "button";
+    copyReportBtn.textContent = "Copy Report";
+    copyReportBtn.style.display = "none";
+    actionRow.appendChild(copyReportBtn);
+
+    els.content.appendChild(actionRow);
+
+    const resultsWrap = document.createElement("div");
+    resultsWrap.style.marginTop = "8px";
+    els.content.appendChild(resultsWrap);
+
+    let headers = null;
+    let rows = null;
+    let lastRowResults = null;
+    let jiraCustomRules = []; // { id, columnName, content }
+    let jiraRuleResolution = {}; // rule.id -> [resolved column indexes]
+    let jiraValidated = false;
+
+    function resetAll() {
+      headers = null;
+      rows = null;
+      lastRowResults = null;
+      jiraRuleResolution = {};
+      jiraValidated = false;
+      fileInput.value = "";
+      fileInfo.innerHTML = "";
+      removeBtn.style.display = "none";
+      mappingWrap.innerHTML = "";
+      actionRow.style.display = "none";
+      copyReportBtn.style.display = "none";
+      resultsWrap.innerHTML = "";
+      setStatus(statusMsg, "", false);
+    }
+
+    function renderMapping() {
+      mappingWrap.innerHTML = "";
+
+      // ---- Custom column checks (fully user-defined; the old fixed
+      // Priority/Severity/Attachments checks were removed since their exact
+      // column names and value formats vary too much per project to hardcode) ----
+      const pasteLabel = document.createElement("div");
+      pasteLabel.className = "inline-group-label";
+      pasteLabel.textContent = "Paste fields to check:";
+      mappingWrap.appendChild(pasteLabel);
+
+      const pasteHint = document.createElement("div");
+      pasteHint.className = "count-badge";
+      pasteHint.textContent =
+        'Format: "Column, Content; Column, Content; ..." \u2014 e.g. "Work Type, Bug; Summary, should not be empty; Labels, A11y_Audit_2026, Product=Frame_io". Use "should not be empty" (or just leave the content blank) for a not-empty check; a comma-separated list of values means the column must contain all of them.';
+      mappingWrap.appendChild(pasteHint);
+
+      const pasteTextarea = document.createElement("textarea");
+      pasteTextarea.rows = 3;
+      pasteTextarea.style.width = "100%";
+      pasteTextarea.style.fontSize = "12px";
+      pasteTextarea.style.marginTop = "4px";
+      mappingWrap.appendChild(pasteTextarea);
+
+      const pasteActionsRow = document.createElement("div");
+      pasteActionsRow.className = "controls-row";
+      pasteActionsRow.style.marginTop = "4px";
+
+      const createTableBtn = document.createElement("button");
+      createTableBtn.className = "action-btn";
+      createTableBtn.type = "button";
+      createTableBtn.textContent = "Create Table";
+      pasteActionsRow.appendChild(createTableBtn);
+
+      const resetPasteBtn = document.createElement("button");
+      resetPasteBtn.className = "copy-btn";
+      resetPasteBtn.type = "button";
+      resetPasteBtn.textContent = "Reset";
+      pasteActionsRow.appendChild(resetPasteBtn);
+
+      mappingWrap.appendChild(pasteActionsRow);
+
+      const pasteStatus = document.createElement("div");
+      pasteStatus.className = "count-badge";
+      mappingWrap.appendChild(pasteStatus);
+
+      resetPasteBtn.addEventListener("click", () => {
+        pasteTextarea.value = "";
+        setStatus(pasteStatus, "", false);
+      });
+
+      const customHeading = document.createElement("div");
+      customHeading.className = "inline-group-label";
+      customHeading.style.marginTop = "10px";
+      customHeading.style.marginBottom = "2px";
+      customHeading.textContent =
+        "Custom column checks (column name, case-insensitive; expected content, exact case \u2014 leave content blank for \u201Cmust not be empty\u201D, use a comma-separated list for \u201Cmust contain all of these\u201D):";
+      mappingWrap.appendChild(customHeading);
+
+      const customRulesTable = document.createElement("div");
+      mappingWrap.appendChild(customRulesTable);
+
+      function renderCustomRulesRows() {
+        customRulesTable.innerHTML = "";
+        jiraCustomRules.forEach((rule) => {
+          const row = document.createElement("div");
+          row.className = "inline-row";
+
+          const colInput = document.createElement("input");
+          colInput.type = "text";
+          colInput.placeholder = "Column name (e.g. Work Type)";
+          colInput.value = rule.columnName;
+          colInput.style.flex = "1";
+          colInput.addEventListener("input", () => {
+            rule.columnName = colInput.value;
+            jiraValidated = false;
+            actionRow.style.display = "none";
+          });
+
+          const contentInput = document.createElement("input");
+          contentInput.type = "text";
+          contentInput.placeholder = "Expected content (e.g. Bug)";
+          contentInput.value = rule.content;
+          contentInput.style.flex = "1";
+          contentInput.addEventListener("input", () => {
+            rule.content = contentInput.value;
+            jiraValidated = false;
+            actionRow.style.display = "none";
+          });
+
+          const removeRowBtn = document.createElement("button");
+          removeRowBtn.className = "copy-btn";
+          removeRowBtn.type = "button";
+          removeRowBtn.textContent = "Remove";
+          removeRowBtn.addEventListener("click", () => {
+            jiraCustomRules = jiraCustomRules.filter((r) => r.id !== rule.id);
+            delete jiraRuleResolution[rule.id];
+            jiraValidated = false;
+            actionRow.style.display = "none";
+            renderCustomRulesRows();
+          });
+
+          row.appendChild(colInput);
+          row.appendChild(contentInput);
+          row.appendChild(removeRowBtn);
+          customRulesTable.appendChild(row);
+        });
+      }
+      renderCustomRulesRows();
+
+      const addRowBtn = document.createElement("button");
+      addRowBtn.className = "copy-btn";
+      addRowBtn.type = "button";
+      addRowBtn.textContent = "+ Add Row";
+      addRowBtn.style.marginTop = "4px";
+      addRowBtn.addEventListener("click", () => {
+        jiraCustomRules.push({ id: `rule-${Date.now()}-${Math.random()}`, columnName: "", content: "" });
+        renderCustomRulesRows();
+      });
+      mappingWrap.appendChild(addRowBtn);
+
+      createTableBtn.addEventListener("click", () => {
+        const parsed = parsePastedRules(pasteTextarea.value);
+        if (!parsed.length) {
+          setStatus(
+            pasteStatus,
+            '\u26D4 Couldn\'t parse any rules \u2014 expected "Column, Content; Column, Content; ...".',
+            true
+          );
+          return;
+        }
+        jiraCustomRules = parsed;
+        renderCustomRulesRows();
+        jiraValidated = false;
+        actionRow.style.display = "none";
+
+        if (headers && rows) {
+          setStatus(pasteStatus, `Parsed ${parsed.length} rule(s) into the table below. Validating against the CSV\u2026`, false);
+          runValidate();
+        } else {
+          setStatus(pasteStatus, `Parsed ${parsed.length} rule(s) into the table below. Upload a CSV, then click Validate.`, false);
+        }
+      });
+
+      const validateBtn = document.createElement("button");
+      validateBtn.className = "action-btn";
+      validateBtn.type = "button";
+      validateBtn.textContent = "Validate";
+      validateBtn.style.marginTop = "8px";
+      validateBtn.style.marginLeft = "8px";
+      mappingWrap.appendChild(validateBtn);
+
+      const validateStatus = document.createElement("div");
+      validateStatus.className = "count-badge";
+      mappingWrap.appendChild(validateStatus);
+
+      const duplicateResolutionWrap = document.createElement("div");
+      mappingWrap.appendChild(duplicateResolutionWrap);
+
+      function renderDuplicateResolution(duplicateRules) {
+        duplicateResolutionWrap.innerHTML = "";
+        const checkboxGroups = [];
+
+        duplicateRules.forEach(({ rule, matches }) => {
+          const wrap = document.createElement("div");
+          wrap.style.marginTop = "6px";
+          const label = document.createElement("div");
+          label.className = "count-badge status-error";
+          label.style.fontWeight = "700";
+          label.textContent = `"${rule.columnName}" matches multiple columns \u2014 choose which to check:`;
+          wrap.appendChild(label);
+
+          const boxes = [];
+          matches.forEach((idx) => {
+            const optLabel = document.createElement("label");
+            optLabel.style.display = "inline-flex";
+            optLabel.style.alignItems = "center";
+            optLabel.style.gap = "4px";
+            optLabel.style.marginRight = "10px";
+            optLabel.style.fontSize = "11.5px";
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.value = String(idx);
+            optLabel.appendChild(cb);
+            optLabel.appendChild(document.createTextNode(`Column ${columnLetterFromIndex(idx)} ("${headers[idx]}")`));
+            wrap.appendChild(optLabel);
+            boxes.push(cb);
+          });
+
+          checkboxGroups.push({ rule, boxes });
+          duplicateResolutionWrap.appendChild(wrap);
+        });
+
+        const confirmBtn = document.createElement("button");
+        confirmBtn.className = "action-btn";
+        confirmBtn.type = "button";
+        confirmBtn.textContent = "Confirm Selection";
+        confirmBtn.style.marginTop = "8px";
+        confirmBtn.addEventListener("click", () => {
+          let allChosen = true;
+          checkboxGroups.forEach(({ rule, boxes }) => {
+            const chosen = boxes.filter((b) => b.checked).map((b) => parseInt(b.value, 10));
+            if (!chosen.length) allChosen = false;
+            jiraRuleResolution[rule.id] = chosen;
+          });
+          if (!allChosen) {
+            setStatus(validateStatus, "Pick at least one column for every duplicated name before confirming.", true);
+            return;
+          }
+          jiraValidated = true;
+          duplicateResolutionWrap.innerHTML = "";
+          setStatus(validateStatus, "CSV is ready for sanity.", false);
+          actionRow.style.display = "";
+        });
+        duplicateResolutionWrap.appendChild(confirmBtn);
+      }
+
+      function runValidate() {
+        duplicateResolutionWrap.innerHTML = "";
+        jiraRuleResolution = {};
+
+        if (!headers || !rows) {
+          setStatus(validateStatus, "Upload a CSV first, then Validate.", true);
+          jiraValidated = false;
+          actionRow.style.display = "none";
+          return;
+        }
+
+        const unmatched = [];
+        const duplicateRules = [];
+
+        jiraCustomRules
+          .filter((r) => r.columnName.trim())
+          .forEach((rule) => {
+            const matches = findAllColumnIndexesCI(headers, rule.columnName);
+            if (matches.length === 0) {
+              unmatched.push(rule);
+            } else if (matches.length === 1) {
+              jiraRuleResolution[rule.id] = matches;
+            } else {
+              duplicateRules.push({ rule, matches });
+            }
+          });
+
+        if (unmatched.length) {
+          setStatus(
+            validateStatus,
+            `\u26D4 Column(s) not found in this CSV: ${unmatched.map((r) => r.columnName).join(", ")}.`,
+            true
+          );
+          jiraValidated = false;
+          actionRow.style.display = "none";
+          return;
+        }
+
+        if (duplicateRules.length) {
+          setStatus(
+            validateStatus,
+            "Multiple columns share the same name \u2014 pick which one(s) to check for each below, then Confirm Selection.",
+            true
+          );
+          renderDuplicateResolution(duplicateRules);
+          jiraValidated = false;
+          actionRow.style.display = "none";
+          return;
+        }
+
+        jiraValidated = true;
+        setStatus(validateStatus, "CSV is ready for sanity.", false);
+        actionRow.style.display = "";
+      }
+
+      validateBtn.addEventListener("click", runValidate);
+
+      // Analyze only reappears after a successful Validate (see above) — hide
+      // it here whenever the mapping is (re)built, e.g. on a fresh upload.
+      actionRow.style.display = "none";
+    }
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = parseCsv(text);
+        if (!parsed.rows.length) {
+          setStatus(statusMsg, "No data rows found in the CSV.", true);
+          return;
+        }
+        headers = parsed.headers;
+        rows = parsed.rows;
+
+        fileInfo.innerHTML = "";
+        const name = document.createElement("span");
+        name.textContent = file.name;
+        fileInfo.appendChild(name);
+        removeBtn.style.display = "";
+
+        resultsWrap.innerHTML = "";
+        copyReportBtn.style.display = "none";
+        lastRowResults = null;
+
+        renderMapping();
+        setStatus(
+          statusMsg,
+          `Loaded "${file.name}" (${rows.length} rows). Map the columns and add any custom checks below, then click Validate.`,
+          false
+        );
+      } catch (err) {
+        setStatus(statusMsg, "Couldn't read the file: " + err.message, true);
+      }
+    });
+
+    removeBtn.addEventListener("click", resetAll);
+
+    analyzeBtn.addEventListener("click", () => {
+      if (!headers || !rows) {
+        setStatus(statusMsg, "Choose a CSV file first.", true);
+        return;
+      }
+      if (!jiraValidated) {
+        setStatus(statusMsg, "Click Validate first.", true);
+        return;
+      }
+      const displayCols = detectJiraDisplayColumns(headers);
+      const activeRules = jiraCustomRules.filter((r) => r.columnName.trim() && jiraRuleResolution[r.id]);
+
+      if (!activeRules.length) {
+        setStatus(statusMsg, "No custom checks to run \u2014 add at least one row (or paste rules) before analyzing.", true);
+        return;
+      }
+
+      const rowResults = rows.map((row, i) => {
+        const checks = activeRules.map((rule, ruleIdx) => {
+          const result = runCustomRuleCheck(rule, jiraRuleResolution[rule.id], row);
+          return {
+            code: `X${ruleIdx + 1}`,
+            name: `Custom: ${rule.columnName}`,
+            ok: result.ok,
+            detail: result.detail,
+          };
+        });
+        return {
+          rowIndex: i + 2,
+          issueId: displayCols.issueId !== -1 ? row[displayCols.issueId] || "" : "",
+          summary: displayCols.summary !== -1 ? row[displayCols.summary] || "" : "",
+          issueUrl: displayCols.issueUrl !== -1 ? row[displayCols.issueUrl] || "" : "",
+          checks,
+        };
+      });
+
+      lastRowResults = rowResults;
+      renderJiraResults(resultsWrap, rowResults);
+      copyReportBtn.style.display = "";
+
+      const passedCount = rowResults.filter((r) => r.checks.every((c) => c.ok)).length;
+      setStatus(statusMsg, `Analyzed ${rowResults.length} row(s). ${passedCount}/${rowResults.length} passed all checks.`, passedCount < rowResults.length);
+    });
+
+    copyReportBtn.addEventListener("click", () => {
+      if (!lastRowResults) return;
+      copyToClipboard(buildJiraReportMarkdown(lastRowResults), copyReportBtn);
+    });
+  }
+
+
+  function renderJiraStatusMode() {
+    const notice = document.createElement("div");
+    notice.className = "template-notice";
+    notice.textContent =
+      "Upload the status files your internal logging tool produces (Auditor Issue ID / Jira Issue ID mapping) to catch duplicate/failed assignments, club several into one file, and compare summaries between your auditor export and JIRA export to catch mismatched linking. Everything here is read-only against your files \u2014 nothing is written back to the auditor or JIRA. Status files you add are remembered even after closing this window, so you can add a few now and more later before clubbing.";
+    els.content.appendChild(notice);
+
+    let statusFiles = []; // { id, name, headers, cols, rows: [{row, rowIndex}], validation, checked }
+    let clubbedResult = null; // { headers, rows: [{row, rowIndex, sourceFile}], validation }
+    let auditorExportFiles = []; // [{ name, cols, rows }] - multiple, since real usage spans several page exports
+    let jiraExportData = null; // { headers, cols, rows }
+
+    const STORAGE_KEY = "jiraStatusFiles";
+
+    async function persistStatusFiles() {
+      // Store only plain serializable fields (drop nothing here — everything
+      // on these objects is already plain data, no File/DOM references).
+      await storageSet(STORAGE_KEY, statusFiles);
+    }
+
+    // ---- File list ----
+    const fileListHeading = document.createElement("div");
+    fileListHeading.className = "inline-group-label";
+    fileListHeading.textContent = "Status files:";
+    els.content.appendChild(fileListHeading);
+
+    const fileListWrap = document.createElement("div");
+    els.content.appendChild(fileListWrap);
+
+    const addFileRow = document.createElement("div");
+    addFileRow.className = "controls-row";
+    addFileRow.style.marginTop = "6px";
+
+    const addFileLabel = document.createElement("label");
+    addFileLabel.className = "upload-btn";
+    addFileLabel.setAttribute("for", "jira-status-file-input");
+    addFileLabel.textContent = "Add File(s)";
+
+    const addFileInput = document.createElement("input");
+    addFileInput.type = "file";
+    addFileInput.accept = ".xlsx,.xls,.csv";
+    addFileInput.multiple = true;
+    addFileInput.id = "jira-status-file-input";
+    addFileInput.hidden = true;
+
+    const selectAllLabel = document.createElement("label");
+    selectAllLabel.style.display = "inline-flex";
+    selectAllLabel.style.alignItems = "center";
+    selectAllLabel.style.gap = "4px";
+    selectAllLabel.style.fontSize = "11.5px";
+    selectAllLabel.style.fontWeight = "600";
+    const selectAllCheckbox = document.createElement("input");
+    selectAllCheckbox.type = "checkbox";
+    selectAllLabel.appendChild(selectAllCheckbox);
+    selectAllLabel.appendChild(document.createTextNode("Select All"));
+
+    const clubBtn = document.createElement("button");
+    clubBtn.className = "action-btn";
+    clubBtn.type = "button";
+    clubBtn.textContent = "Club All JIRA Issues";
+
+    const clearAllBtn = document.createElement("button");
+    clearAllBtn.className = "copy-btn";
+    clearAllBtn.type = "button";
+    clearAllBtn.textContent = "Clear";
+
+    addFileRow.appendChild(addFileLabel);
+    addFileRow.appendChild(addFileInput);
+    addFileRow.appendChild(selectAllLabel);
+    addFileRow.appendChild(clubBtn);
+    addFileRow.appendChild(clearAllBtn);
+    els.content.appendChild(addFileRow);
+
+    const statusMsg = document.createElement("div");
+    statusMsg.className = "count-badge";
+    els.content.appendChild(statusMsg);
+
+    // ---- Club results ----
+    const clubResultsWrap = document.createElement("div");
+    clubResultsWrap.className = "errors-section";
+    clubResultsWrap.style.display = "none";
+    els.content.appendChild(clubResultsWrap);
+
+    // ---- Compare section ----
+    const compareSection = document.createElement("div");
+    compareSection.style.marginTop = "12px";
+    compareSection.style.display = "none";
+    els.content.appendChild(compareSection);
+
+    function summarizeValidation(validation) {
+      const parts = [];
+      if (validation.duplicateJiraIds.length) {
+        parts.push(`${validation.duplicateJiraIds.length} JIRA ID(s) linked to multiple Auditor IDs`);
+      }
+      if (validation.duplicateAuditorIds.length) {
+        parts.push(`${validation.duplicateAuditorIds.length} Auditor ID(s) linked to multiple JIRA IDs`);
+      }
+      if (validation.failed.length) {
+        parts.push(`${validation.failed.length} row(s) not marked Success`);
+      }
+      return parts;
+    }
+
+    // Renders the actual itemized list of every duplicate/failed row (not
+    // just a rolled-up count), each labeled with its Auditor ID so specific
+    // problem rows can be found directly instead of just knowing a count exists.
+    function renderIssueDetails(container, validation, cols) {
+      validation.duplicateJiraIds.forEach(({ jiraId, entries }) => {
+        const line = document.createElement("div");
+        line.className = "count-badge status-error";
+        const auditorIds = entries.map((e) => e.row[cols.auditorId]).join(", ");
+        const sources = entries[0].sourceFile ? ` (from: ${entries.map((e) => e.sourceFile).join(", ")})` : "";
+        line.textContent = `Duplicate JIRA ID ${jiraId} \u2192 Auditor IDs: ${auditorIds}${sources}`;
+        container.appendChild(line);
+      });
+      validation.duplicateAuditorIds.forEach(({ auditorId, entries }) => {
+        const line = document.createElement("div");
+        line.className = "count-badge status-error";
+        const jiraIds = entries.map((e) => e.row[cols.jiraId]).join(", ");
+        const sources = entries[0].sourceFile ? ` (from: ${entries.map((e) => e.sourceFile).join(", ")})` : "";
+        line.textContent = `Duplicate Auditor ID ${auditorId} \u2192 JIRA IDs: ${jiraIds}${sources}`;
+        container.appendChild(line);
+      });
+      validation.failed.forEach((r) => {
+        const line = document.createElement("div");
+        line.className = "count-badge status-error";
+        const auditorId = cols.auditorId !== -1 ? r.row[cols.auditorId] : "?";
+        const jiraId = cols.jiraId !== -1 ? r.row[cols.jiraId] : "?";
+        const source = r.sourceFile ? ` (from: ${r.sourceFile})` : "";
+        line.textContent = `Auditor ID ${auditorId} (JIRA ${jiraId}) not marked Success \u2014 Status: "${r.status}"${source}`;
+        container.appendChild(line);
+      });
+    }
+
+    function renderFileList() {
+      fileListWrap.innerHTML = "";
+      if (!statusFiles.length) {
+        fileListWrap.innerHTML = '<div class="empty-state">No files added yet.</div>';
+        return;
+      }
+      statusFiles.forEach((f) => {
+        const row = document.createElement("div");
+        row.className = "field-block";
+        row.style.padding = "8px 10px";
+        row.style.display = "flex";
+        row.style.alignItems = "flex-start";
+        row.style.gap = "8px";
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = f.checked;
+        cb.style.marginTop = "2px";
+        cb.addEventListener("change", () => {
+          f.checked = cb.checked;
+          selectAllCheckbox.checked = statusFiles.every((sf) => sf.checked);
+          persistStatusFiles();
+        });
+        row.appendChild(cb);
+
+        const info = document.createElement("div");
+        info.style.flex = "1";
+
+        const nameLine = document.createElement("div");
+        nameLine.style.fontWeight = "600";
+        nameLine.style.fontSize = "12.5px";
+        nameLine.textContent = `${f.name} (${f.rows.length} rows)`;
+        info.appendChild(nameLine);
+
+        const problems = summarizeValidation(f.validation);
+        if (problems.length) {
+          const countLine = document.createElement("div");
+          countLine.className = "count-badge status-error";
+          countLine.textContent = `\u26D4 ${problems.join("; ")}:`;
+          info.appendChild(countLine);
+          renderIssueDetails(info, f.validation, f.cols);
+        } else {
+          const okLine = document.createElement("div");
+          okLine.className = "count-badge";
+          okLine.textContent = "\u2705 No issues found in this file.";
+          info.appendChild(okLine);
+        }
+        row.appendChild(info);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "copy-btn";
+        removeBtn.type = "button";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => {
+          statusFiles = statusFiles.filter((sf) => sf.id !== f.id);
+          renderFileList();
+          persistStatusFiles();
+        });
+        row.appendChild(removeBtn);
+
+        fileListWrap.appendChild(row);
+      });
+    }
+    renderFileList();
+
+    // Restore previously-added status files from storage, if any.
+    (async () => {
+      const stored = await storageGet(STORAGE_KEY);
+      if (stored && stored.length) {
+        statusFiles = stored;
+        renderFileList();
+        selectAllCheckbox.checked = statusFiles.every((sf) => sf.checked);
+        setStatus(statusMsg, `Restored ${statusFiles.length} previously-added file(s).`, false);
+      }
+    })();
+
+    async function handleFilesAdded(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      let addedCount = 0;
+      let errorCount = 0;
+
+      for (const file of files) {
+        setStatus(statusMsg, `Reading "${file.name}"\u2026`, false);
+        try {
+          const { headers, rows } = await readUploadedTableFile(file);
+          const cols = detectStatusColumns(headers);
+          if (cols.auditorId === -1 || cols.jiraId === -1) {
+            setStatus(
+              statusMsg,
+              `\u26D4 "${file.name}" doesn't look like a status file \u2014 couldn't find "Auditor Issue ID"/"Jira Issue ID" columns. Skipped.`,
+              true
+            );
+            errorCount++;
+            continue;
+          }
+          const wrappedRows = rows.map((row, i) => ({ row, rowIndex: i + 2 }));
+          const validation = validateStatusRows(cols, wrappedRows);
+          statusFiles.push({
+            id: `file-${Date.now()}-${Math.random()}`,
+            name: file.name,
+            headers,
+            cols,
+            rows: wrappedRows,
+            validation,
+            checked: true,
+          });
+          addedCount++;
+        } catch (err) {
+          setStatus(statusMsg, `Error reading "${file.name}": ${err.message}`, true);
+          errorCount++;
+        }
+      }
+
+      renderFileList();
+      await persistStatusFiles();
+      setStatus(
+        statusMsg,
+        `Added ${addedCount} file(s).${errorCount ? ` ${errorCount} file(s) had errors \u2014 see above.` : ""}`,
+        errorCount > 0
+      );
+    }
+
+    addFileInput.addEventListener("change", async () => {
+      await handleFilesAdded(addFileInput.files);
+      addFileInput.value = "";
+    });
+
+    selectAllCheckbox.addEventListener("change", () => {
+      statusFiles.forEach((f) => (f.checked = selectAllCheckbox.checked));
+      renderFileList();
+      persistStatusFiles();
+    });
+
+    clearAllBtn.addEventListener("click", async () => {
+      statusFiles = [];
+      clubbedResult = null;
+      auditorExportFiles = [];
+      jiraExportData = null;
+      await storageRemove(STORAGE_KEY);
+      renderFileList();
+      clubResultsWrap.innerHTML = "";
+      clubResultsWrap.style.display = "none";
+      compareSection.innerHTML = "";
+      compareSection.style.display = "none";
+      selectAllCheckbox.checked = false;
+      setStatus(statusMsg, "Cleared everything.", false);
+    });
+
+    clubBtn.addEventListener("click", () => {
+      const checkedFiles = statusFiles.filter((f) => f.checked);
+      if (!checkedFiles.length) {
+        setStatus(statusMsg, "Check at least one file to club.", true);
+        return;
+      }
+
+      const baseCols = checkedFiles[0].cols;
+      const combinedRows = [];
+      checkedFiles.forEach((f) => {
+        f.rows.forEach((r) => combinedRows.push({ ...r, sourceFile: f.name }));
+      });
+
+      const validation = validateStatusRows(baseCols, combinedRows);
+      clubbedResult = {
+        headers: [...checkedFiles[0].headers, "Source File"],
+        cols: baseCols,
+        rows: combinedRows,
+        validation,
+      };
+
+      renderClubResults();
+      compareSection.style.display = "";
+      renderCompareSection();
+    });
+
+    function renderClubResults() {
+      clubResultsWrap.innerHTML = "";
+      clubResultsWrap.style.display = "";
+
+      const heading = document.createElement("div");
+      heading.className = "errors-heading";
+      heading.textContent = "Clubbed Result";
+      clubResultsWrap.appendChild(heading);
+
+      const countLine = document.createElement("div");
+      countLine.className = "count-badge";
+      countLine.textContent = `${clubbedResult.rows.length} total row(s) from ${new Set(clubbedResult.rows.map((r) => r.sourceFile)).size} file(s).`;
+      clubResultsWrap.appendChild(countLine);
+
+      const problems = summarizeValidation(clubbedResult.validation);
+      const statusLine = document.createElement("div");
+      statusLine.className = "count-badge";
+      if (problems.length) {
+        statusLine.classList.add("status-error");
+        statusLine.textContent = `\u26D4 Across the clubbed set: ${problems.join("; ")} (catches duplicates spanning different files, not just within one):`;
+        clubResultsWrap.appendChild(statusLine);
+        renderIssueDetails(clubResultsWrap, clubbedResult.validation, clubbedResult.cols);
+      } else {
+        statusLine.textContent = "\u2705 No duplicates or failures found across the clubbed set.";
+        clubResultsWrap.appendChild(statusLine);
+      }
+
+      const downloadBtn = document.createElement("button");
+      downloadBtn.className = "action-btn";
+      downloadBtn.type = "button";
+      downloadBtn.textContent = "Download Clubbed File";
+      downloadBtn.style.marginTop = "8px";
+      downloadBtn.addEventListener("click", () => {
+        try {
+          const aoa = clubbedResult.rows.map((r) => [...r.row, r.sourceFile]);
+          downloadAsXlsx("clubbed-jira-status.xlsx", clubbedResult.headers, aoa);
+        } catch (err) {
+          setStatus(statusMsg, "Download error: " + err.message, true);
+        }
+      });
+      clubResultsWrap.appendChild(downloadBtn);
+    }
+
+    // ---- Compare: Auditor export (Issue ID + Summary) vs JIRA export (Issue key + Summary) ----
+    function renderCompareSection() {
+      compareSection.innerHTML = "";
+
+      const heading = document.createElement("div");
+      heading.className = "inline-group-label";
+      heading.textContent = "Compare (uses the clubbed result above):";
+      compareSection.appendChild(heading);
+
+      const uploadRow = document.createElement("div");
+      uploadRow.className = "controls-row";
+      uploadRow.style.marginTop = "6px";
+
+      // Auditor Export supports multiple files, since real usage typically
+      // spans several page exports — an Auditor ID only "not found" if it's
+      // missing from ALL of them, not just whichever single file was uploaded.
+      const auditorGroup = document.createElement("div");
+      auditorGroup.className = "upload-group";
+      const auditorLabel = document.createElement("label");
+      auditorLabel.className = "upload-btn";
+      auditorLabel.setAttribute("for", "jira-status-auditor-input");
+      auditorLabel.textContent = "Upload Auditor Export CSV(s)";
+      const auditorInput = document.createElement("input");
+      auditorInput.type = "file";
+      auditorInput.accept = ".csv,.xlsx,.xls";
+      auditorInput.multiple = true;
+      auditorInput.id = "jira-status-auditor-input";
+      auditorInput.hidden = true;
+      const auditorInfo = document.createElement("div");
+      auditorInfo.className = "excel-info";
+      auditorInfo.style.display = "block";
+      auditorGroup.appendChild(auditorLabel);
+      auditorGroup.appendChild(auditorInput);
+      auditorGroup.appendChild(auditorInfo);
+      uploadRow.appendChild(auditorGroup);
+
+      const jiraGroup = document.createElement("div");
+      jiraGroup.className = "upload-group";
+      const jiraLabel = document.createElement("label");
+      jiraLabel.className = "upload-btn";
+      jiraLabel.setAttribute("for", "jira-status-jira-input");
+      jiraLabel.textContent = "Upload JIRA Export CSV";
+      const jiraInput = document.createElement("input");
+      jiraInput.type = "file";
+      jiraInput.accept = ".csv,.xlsx,.xls";
+      jiraInput.id = "jira-status-jira-input";
+      jiraInput.hidden = true;
+      const jiraInfo = document.createElement("div");
+      jiraInfo.className = "excel-info";
+      jiraGroup.appendChild(jiraLabel);
+      jiraGroup.appendChild(jiraInput);
+      jiraGroup.appendChild(jiraInfo);
+      uploadRow.appendChild(jiraGroup);
+
+      compareSection.appendChild(uploadRow);
+
+      const compareBtn = document.createElement("button");
+      compareBtn.className = "action-btn";
+      compareBtn.type = "button";
+      compareBtn.textContent = "Compare";
+      compareBtn.style.marginTop = "8px";
+      compareSection.appendChild(compareBtn);
+
+      const compareStatus = document.createElement("div");
+      compareStatus.className = "count-badge";
+      compareSection.appendChild(compareStatus);
+
+      const tallyWrap = document.createElement("div");
+      tallyWrap.style.marginTop = "8px";
+      compareSection.appendChild(tallyWrap);
+
+      const compareResultsWrap = document.createElement("div");
+      compareResultsWrap.style.marginTop = "8px";
+      compareSection.appendChild(compareResultsWrap);
+
+      function refreshAuditorInfo() {
+        if (!auditorExportFiles.length) {
+          auditorInfo.textContent = "";
+          return;
+        }
+        const totalRows = auditorExportFiles.reduce((sum, f) => sum + f.rows.length, 0);
+        auditorInfo.textContent = `${auditorExportFiles.length} file(s) loaded, ${totalRows} row(s) total: ${auditorExportFiles.map((f) => f.name).join(", ")}`;
+      }
+
+      auditorInput.addEventListener("change", async () => {
+        const files = Array.from(auditorInput.files || []);
+        auditorInput.value = "";
+        for (const file of files) {
+          try {
+            const { headers, rows } = await readUploadedTableFile(file);
+            const cols = detectCsvColumnsV2(headers);
+            if (cols.issueId === -1 || cols.summary === -1) {
+              setStatus(compareStatus, `\u26D4 Couldn't find Issue ID/Summary columns in "${file.name}" \u2014 skipped.`, true);
+              continue;
+            }
+            auditorExportFiles.push({ name: file.name, cols, rows });
+          } catch (err) {
+            setStatus(compareStatus, `Error reading "${file.name}": ${err.message}`, true);
+          }
+        }
+        refreshAuditorInfo();
+        if (files.length) setStatus(compareStatus, `Loaded ${auditorExportFiles.length} auditor export file(s) so far.`, false);
+      });
+
+      jiraInput.addEventListener("change", async () => {
+        const file = jiraInput.files[0];
+        if (!file) return;
+        try {
+          const { headers, rows } = await readUploadedTableFile(file);
+          const norm = headers.map((h) => String(h || "").trim().toLowerCase());
+          const keyIdx = norm.findIndex((h) => h === "issue key" || h === "key");
+          const summaryIdx = norm.findIndex((h) => h === "summary");
+          if (keyIdx === -1 || summaryIdx === -1) {
+            setStatus(compareStatus, `\u26D4 Couldn't find "Issue key"/"Summary" columns in "${file.name}".`, true);
+            return;
+          }
+          jiraExportData = { headers, cols: { key: keyIdx, summary: summaryIdx }, rows };
+          jiraInfo.textContent = `${file.name} (${rows.length} rows)`;
+          setStatus(compareStatus, "", false);
+        } catch (err) {
+          setStatus(compareStatus, "Error reading JIRA export: " + err.message, true);
+        }
+      });
+
+      compareBtn.addEventListener("click", () => {
+        if (!clubbedResult) {
+          setStatus(compareStatus, "Club your status files first.", true);
+          return;
+        }
+        if (!auditorExportFiles.length || !jiraExportData) {
+          setStatus(compareStatus, "Upload at least one Auditor Export CSV and the JIRA Export CSV first.", true);
+          return;
+        }
+
+        // Merges Issue ID -> Summary across every uploaded auditor export
+        // file. If the same ID appears in more than one file, the last one
+        // wins — that's an edge case worth knowing about but not blocking on.
+        const auditorSummaryById = {};
+        const auditorSourceById = {};
+        auditorExportFiles.forEach((f) => {
+          f.rows.forEach((row) => {
+            const id = String(row[f.cols.issueId] || "").trim();
+            if (id) {
+              auditorSummaryById[id] = row[f.cols.summary] || "";
+              auditorSourceById[id] = f.name;
+            }
+          });
+        });
+
+        const jiraSummaryByKey = {};
+        jiraExportData.rows.forEach((row) => {
+          const key = String(row[jiraExportData.cols.key] || "").trim();
+          if (key) jiraSummaryByKey[key] = row[jiraExportData.cols.summary] || "";
+        });
+
+        const SIMILARITY_THRESHOLD = 0.4; // below this, summaries are treated as likely mismatched
+        const results = [];
+        const tally = {}; // sourceFile -> { total, matched, failed }
+
+        clubbedResult.rows.forEach((r) => {
+          const auditorId = String(r.row[clubbedResult.cols.auditorId] || "").trim();
+          const jiraId = String(r.row[clubbedResult.cols.jiraId] || "").trim();
+          if (!auditorId || !jiraId) return;
+
+          const source = r.sourceFile || "(unknown file)";
+          if (!tally[source]) tally[source] = { total: 0, matched: 0, failed: 0 };
+          tally[source].total++;
+
+          const auditorSummary = auditorSummaryById[auditorId];
+          const jiraSummary = jiraSummaryByKey[jiraId];
+
+          if (auditorSummary === undefined || jiraSummary === undefined) {
+            tally[source].failed++;
+            results.push({
+              auditorId,
+              jiraId,
+              sourceFile: source,
+              auditorSummary:
+                auditorSummary === undefined
+                  ? `(No Auditor Summary found for ID ${auditorId} in any of the ${auditorExportFiles.length} uploaded Auditor Export file(s) \u2014 check the ID exists in one of them.)`
+                  : auditorSummary,
+              jiraSummary:
+                jiraSummary === undefined
+                  ? `(No JIRA Summary found for ${jiraId} in the uploaded JIRA Export.)`
+                  : jiraSummary,
+              score: null,
+              notFound: true,
+            });
+            return;
+          }
+
+          const score = textSimilarity(auditorSummary, jiraSummary);
+          if (score < SIMILARITY_THRESHOLD) {
+            tally[source].failed++;
+            results.push({ auditorId, jiraId, sourceFile: source, auditorSummary, jiraSummary, score, notFound: false });
+          } else {
+            tally[source].matched++;
+          }
+        });
+
+        // ---- Tally ----
+        tallyWrap.innerHTML = "";
+        const tallyHeading = document.createElement("div");
+        tallyHeading.className = "errors-heading";
+        tallyHeading.textContent = "Comparison Tally";
+        tallyWrap.appendChild(tallyHeading);
+
+        let grandTotal = 0;
+        let grandMatched = 0;
+        let grandFailed = 0;
+        Object.entries(tally).forEach(([source, t]) => {
+          grandTotal += t.total;
+          grandMatched += t.matched;
+          grandFailed += t.failed;
+          const line = document.createElement("div");
+          line.className = "count-badge";
+          if (t.failed > 0) line.classList.add("status-error");
+          line.textContent = `${source}: ${t.matched}/${t.total} mapped correctly, ${t.failed} failed.`;
+          tallyWrap.appendChild(line);
+        });
+        const totalLine = document.createElement("div");
+        totalLine.className = "count-badge";
+        totalLine.style.fontWeight = "700";
+        if (grandFailed > 0) totalLine.classList.add("status-error");
+        totalLine.textContent = `Total: ${grandMatched}/${grandTotal} mapped correctly, ${grandFailed} failed.`;
+        tallyWrap.appendChild(totalLine);
+
+        // ---- Detailed mismatch list ----
+        compareResultsWrap.innerHTML = "";
+        if (!results.length) {
+          setStatus(compareStatus, "\u2705 No summary mismatches found.", false);
+          return;
+        }
+
+        setStatus(
+          compareStatus,
+          `\u26D4 ${results.length} potential mismatch(es) found (summary similarity below ${SIMILARITY_THRESHOLD}, or ID not found in one of the exports).`,
+          true
+        );
+
+        results.forEach((r) => {
+          const item = document.createElement("div");
+          item.className = "field-block";
+          item.style.padding = "8px 10px";
+          item.style.fontSize = "12px";
+          const idLine = document.createElement("div");
+          idLine.style.fontWeight = "600";
+          idLine.textContent = `Auditor ${r.auditorId} \u2194 ${r.jiraId} (from: ${r.sourceFile})${
+            r.notFound ? "" : ` \u2014 similarity ${(r.score * 100).toFixed(0)}%`
+          }`;
+          item.appendChild(idLine);
+          const auditorLine = document.createElement("div");
+          auditorLine.textContent = `Auditor Summary: ${r.auditorSummary}`;
+          item.appendChild(auditorLine);
+          const jiraLine = document.createElement("div");
+          jiraLine.textContent = `JIRA Summary: ${r.jiraSummary}`;
+          item.appendChild(jiraLine);
+          compareResultsWrap.appendChild(item);
+        });
+      });
+    }
+  }
+
+
   function renderCsvSanityMode() {
     const modeRow = document.createElement("div");
     modeRow.className = "inline-row";
@@ -4408,12 +6085,24 @@
       modeSelect.appendChild(opt);
     });
     modeSelect.addEventListener("change", () => {
+      const wasJira = !!getCsvSanityMode(csvSanityState.modeKey).isJira;
       csvSanityState.modeKey = modeSelect.value;
+      const isJiraNow = !!getCsvSanityMode(csvSanityState.modeKey).isJira;
+      // The JIRA UI is structurally different (column-mapping controls
+      // instead of the fixed axe-Auditor layout), so only force a full
+      // rebuild when crossing that boundary — switching between the
+      // axe-Auditor sub-modes keeps any already-uploaded CSV/results in place.
+      if (wasJira !== isJiraNow) render();
     });
 
     modeRow.appendChild(modeLabel);
     modeRow.appendChild(modeSelect);
     els.content.appendChild(modeRow);
+
+    if (getCsvSanityMode(csvSanityState.modeKey).isJira) {
+      renderJiraSanityUi();
+      return;
+    }
 
     const notice = document.createElement("div");
     notice.className = "template-notice";
