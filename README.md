@@ -13,3 +13,8 @@
    (not a dropdown), so it stays open while you work on the auditor page in
    another tab or window. Clicking the icon again just refocuses the same
    window instead of opening a second one.
+
+---
+
+**A11y Auto Drafter** — created by **Akhil**
+GitHub: https://github.com/Akhil-d07/Ally-AutoDraft-Adobe-and-Yahoo-audits

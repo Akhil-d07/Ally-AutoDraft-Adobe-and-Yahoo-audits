@@ -16,13 +16,42 @@
     els.tabs = document.querySelectorAll(".tab-btn");
     els.content = document.getElementById("content");
 
-    els.tabs.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        state.mode = btn.dataset.mode;
-        els.tabs.forEach((b) => b.classList.toggle("active", b === btn));
-        render();
+    // Tabs follow the WAI-ARIA tabs pattern: roving tabindex, aria-selected,
+    // arrow keys / Home / End move between tabs.
+    const tabList = Array.from(els.tabs);
+    function activateTab(btn, moveFocus) {
+      state.mode = btn.dataset.mode;
+      tabList.forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+        b.tabIndex = on ? 0 : -1;
+      });
+      els.content.setAttribute("aria-labelledby", btn.id);
+      if (moveFocus) btn.focus();
+      render();
+    }
+    tabList.forEach((btn, i) => {
+      btn.addEventListener("click", () => activateTab(btn, false));
+      btn.addEventListener("keydown", (e) => {
+        let next = null;
+        if (e.key === "ArrowRight") next = tabList[(i + 1) % tabList.length];
+        else if (e.key === "ArrowLeft") next = tabList[(i - 1 + tabList.length) % tabList.length];
+        else if (e.key === "Home") next = tabList[0];
+        else if (e.key === "End") next = tabList[tabList.length - 1];
+        if (next) {
+          e.preventDefault();
+          activateTab(next, true);
+        }
       });
     });
+
+    // Version comes from the manifest (single source of truth).
+    const versionEl = document.getElementById("app-version");
+    if (versionEl && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
+      versionEl.textContent = "v" + chrome.runtime.getManifest().version;
+    }
+    refreshCounter();
 
     render();
     ensureDeviceTypeLoaded().then((loaded) => {
@@ -46,6 +75,7 @@
   }
 
   function render() {
+    backupListeners.length = 0; // Restore buttons from the previous render are gone
     els.content.innerHTML = "";
     if (state.mode === "DATA") renderListMode("DATA");
     else if (state.mode === "TEMPLATE") renderTemplateMode();
@@ -139,6 +169,7 @@
     copyBtn.className = "copy-btn";
     copyBtn.type = "button";
     copyBtn.textContent = "Copy";
+    copyBtn.setAttribute("aria-label", `Copy ${label}`);
 
     header.appendChild(span);
     header.appendChild(copyBtn);
@@ -146,6 +177,7 @@
     const textarea = document.createElement("textarea");
     textarea.value = value;
     textarea.spellcheck = false;
+    textarea.setAttribute("aria-label", label);
 
     copyBtn.addEventListener("click", () => copyToClipboard(textarea.value, copyBtn));
 
@@ -202,10 +234,7 @@
       throw new Error("No active browser tab found \u2014 click on the auditor page, then try again.");
     }
 
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: pageExtractor,
-    });
+    const results = await injectInPage(tab.id, pageExtractor);
     return results && results[0] ? results[0].result : null;
   }
 
@@ -224,57 +253,159 @@
     return tab || null;
   }
 
+  // ---------- Page selectors: the ONE place they live ----------
+  //
+  // If the auditor page's layout changes, fix it HERE. Every read from / write
+  // to the page goes through page-helpers.js (injected before each call),
+  // which uses these CSS selectors in order, then — for fields that have one —
+  // the visible label text as a best-effort fallback.
+  const PAGE_SELECTORS = {
+    selectors: {
+      summary: ["#summary"],
+      details: ["#details"],
+      checkpoint: ["#combobox"],
+      severity: ["#severity-select"],
+      pageField: ["#issue-form > div.modal-content > div:nth-child(12) > div"],
+      defaultSummary: ["#default-summary"],
+      customDescription: ["#custom-description"],
+      notes: ["#notes"],
+      // The standard description text on the issue form (Description panel).
+      descText: [
+        "#issue-form > div.modal-content > fieldset > div.pure-g > div.desc-text.pure-u-3-5",
+        "#issue-form div.desc-text",
+      ],
+      // id looks like issue_elements[<uuid>][source] — the uuid changes per issue.
+      sourceCode: ['[id^="issue_elements["][id$="][source]"]'],
+    },
+    // Visible label text(s) tried when the selectors above find nothing.
+    labels: { pageField: ["Page", "Page Name", "Screen Name"] },
+    attachments: {
+      fieldset: "#issue-more-info > fieldset",
+      web: "#issue-more-info > fieldset > div:nth-child(6)",
+      native: "#issue-more-info > fieldset > div:nth-child(7)",
+      // Each attached file has an edit field with an id like this.
+      files: '[id^="ws-assure-generated-"]',
+    },
+  };
+
+  // Drop-in for chrome.scripting.executeScript on the auditor tab: injects
+  // page-helpers.js first, then runs `func` with (...args, PAGE_SELECTORS) and
+  // returns the usual results array.
+  async function injectInPage(tabId, func, args) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["page-helpers.js"] });
+    return chrome.scripting.executeScript({
+      target: { tabId },
+      func,
+      args: [...(args || []), PAGE_SELECTORS],
+    });
+  }
+
+  // ---------- Undo (Restore previous) + "updated today" counter ----------
+  //
+  // Before this tool overwrites Summary/Details it saves what was there. Repeat
+  // Updates on the SAME issue keep the original: if the page still holds what
+  // this tool last wrote, nothing new is saved (and it isn't counted again).
+  const BACKUP_KEY = "updateBackup";
+  const STATS_KEY = "sessionStats";
+  let lastWrittenState = null; // { summary, details } as last written by this tool (trimmed)
+  const backupListeners = []; // refresh callbacks for the Restore buttons currently on screen
+
+  function notifyBackupChanged() {
+    backupListeners.forEach((fn) => fn());
+  }
+
+  function noteWritten(summary, details) {
+    lastWrittenState = { summary: String(summary || "").trim(), details: String(details || "").trim() };
+  }
+
+  async function backupBeforeWrite(tabId) {
+    const res = await injectInPage(tabId, summaryUpdateExtractor);
+    const cur = res && res[0] ? res[0].result : null;
+    if (!cur) return { isNewIssue: true };
+    const same = !!lastWrittenState && cur.summary === lastWrittenState.summary && cur.details === lastWrittenState.details;
+    if (same) return { isNewIssue: false };
+    await storageSet(BACKUP_KEY, { summary: cur.summary, details: cur.details, at: Date.now() });
+    notifyBackupChanged();
+    return { isNewIssue: true };
+  }
+
+  // "Restore previous" button; onResult(text, isError) reports back to the tab's status line.
+  function buildRestoreButton(onResult) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.textContent = "Restore previous";
+    btn.disabled = true;
+
+    async function refresh() {
+      const saved = await storageGet(BACKUP_KEY);
+      btn.disabled = !saved;
+      btn.title = saved
+        ? `Put back the Summary and Details from before the last update (saved ${new Date(saved.at).toLocaleTimeString()}).`
+        : "Nothing to restore yet \u2014 available after an Update or Log Issue.";
+    }
+    backupListeners.push(refresh);
+    refresh();
+
+    btn.addEventListener("click", async () => {
+      try {
+        const saved = await storageGet(BACKUP_KEY);
+        if (!saved) return;
+        const tab = await getTargetTab();
+        if (!tab || !tab.id) throw new Error("No active browser tab found.");
+        const res = await injectInPage(tab.id, pageWriter, [saved.summary, saved.details]);
+        const out = res && res[0] ? res[0].result : null;
+        const ok = !!(out && out.summaryOk && out.detailsOk);
+        lastWrittenState = null;
+        onResult(
+          ok
+            ? "Restored the previous Summary and Details on the page. Click Get Data to reload them here."
+            : "Couldn't restore \u2014 the Summary or Details field wasn't found on the page.",
+          !ok
+        );
+      } catch (err) {
+        onResult("Error restoring: " + err.message, true);
+      }
+    });
+    return btn;
+  }
+
+  function todayKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  async function refreshCounter() {
+    const el = document.getElementById("issue-counter");
+    if (!el) return;
+    const st = await storageGet(STATS_KEY);
+    const n = st && st.date === todayKey() ? st.count : 0;
+    el.textContent = `Updated today: ${n}`;
+    el.title = `Issues updated today: ${n} (resets at midnight; repeat updates of the same issue count once).`;
+  }
+
+  async function bumpTodayCount() {
+    const st = await storageGet(STATS_KEY);
+    const count = st && st.date === todayKey() ? st.count + 1 : 1;
+    await storageSet(STATS_KEY, { date: todayKey(), count });
+    refreshCounter();
+  }
+
   // Injected into the auditor page via chrome.scripting.executeScript.
   // Must be fully self-contained — no references to outer-scope variables.
-  function pageExtractor() {
-    function getVal(selector) {
-      const el = document.querySelector(selector);
-      if (!el) return "";
-      if (el.tagName === "SELECT") {
-        // .value returns the option's value attribute, which often doesn't match
-        // human-readable text (e.g. "critical" vs "Critical") — use the visible
-        // selected option's text instead, since that's what reference lookups match against.
-        if (el.selectedIndex >= 0 && el.options[el.selectedIndex]) {
-          return (el.options[el.selectedIndex].text || "").trim();
-        }
-        return (el.value || "").trim();
-      }
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-        return (el.value || "").trim();
-      }
-      return (el.textContent || "").trim();
-    }
-
-    function getSourceCode() {
-      // id looks like issue_elements[<uuid>][source] — uuid changes per issue,
-      // so match by prefix/suffix instead of an exact id.
-      const el = document.querySelector('[id^="issue_elements["][id$="][source]"]');
-      if (!el) return "";
-      if (el.tagName === "SELECT") {
-        if (el.selectedIndex >= 0 && el.options[el.selectedIndex]) {
-          return (el.options[el.selectedIndex].text || "").trim();
-        }
-        return (el.value || "").trim();
-      }
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-        return (el.value || "").trim();
-      }
-      return (el.textContent || "").trim();
-    }
-
+  function pageExtractor(S) {
+    const H = window.__A11Y_DRAFTER__; // page-helpers.js, injected just before this runs
+    const getVal = (key) => H.val(S, key);
     return {
-      summary: getVal("#summary"),
-      checkpoint: getVal("#combobox"),
-      pageName: getVal("#issue-form > div.modal-content > div:nth-child(12) > div"),
-      defaultSummaryFlag: getVal("#default-summary"),
-      description: getVal("#custom-description"),
-      // Standard description text from the issue form (Description panel).
-      descText:
-        getVal("#issue-form > div.modal-content > fieldset > div.pure-g > div.desc-text.pure-u-3-5") ||
-        getVal("#issue-form div.desc-text"),
-      impact: getVal("#severity-select"),
-      sourceCode: getSourceCode(),
-      recommendation: getVal("#notes"),
+      summary: getVal("summary"),
+      checkpoint: getVal("checkpoint"),
+      pageName: getVal("pageField"),
+      defaultSummaryFlag: getVal("defaultSummary"),
+      description: getVal("customDescription"),
+      descText: getVal("descText"), // standard description text from the issue form
+      impact: getVal("severity"),
+      sourceCode: getVal("sourceCode"),
+      recommendation: getVal("notes"),
     };
   }
 
@@ -282,36 +413,11 @@
   // values back in. Must be fully self-contained — no references to outer-scope
   // variables. Uses the native property setter (bypassing React's overridden
   // setter) so frameworks that track input via onChange actually notice the change.
-  function pageWriter(summaryText, detailsText) {
-    function setValue(selector, value) {
-      const el = document.querySelector(selector);
-      if (!el) return false;
-
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-        const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-        const desc = Object.getOwnPropertyDescriptor(proto, "value");
-        if (desc && desc.set) {
-          desc.set.call(el, value);
-        } else {
-          el.value = value;
-        }
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        return true;
-      }
-
-      if (el.isContentEditable) {
-        el.textContent = value;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        return true;
-      }
-
-      return false;
-    }
-
+  function pageWriter(summaryText, detailsText, S) {
+    const H = window.__A11Y_DRAFTER__;
     return {
-      summaryOk: setValue("#summary", summaryText),
-      detailsOk: setValue("#details", detailsText),
+      summaryOk: H.setValue(S, "summary", summaryText),
+      detailsOk: H.setValue(S, "details", detailsText),
     };
   }
 
@@ -319,67 +425,17 @@
   // Reads the live Summary + Page fields plus the already-written Details text
   // (as opposed to pageExtractor, which reads the individual issue-authoring
   // fields for a fresh Get Data). Self-contained, same constraint as above.
-  function summaryUpdateExtractor() {
-    function getVal(selector) {
-      const el = document.querySelector(selector);
-      if (!el) return "";
-      if (el.tagName === "SELECT") {
-        if (el.selectedIndex >= 0 && el.options[el.selectedIndex]) {
-          return (el.options[el.selectedIndex].text || "").trim();
-        }
-        return (el.value || "").trim();
-      }
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-        return (el.value || "").trim();
-      }
-      return (el.textContent || "").trim();
-    }
-
+  function summaryUpdateExtractor(S) {
+    const H = window.__A11Y_DRAFTER__;
+    const getVal = (key) => H.val(S, key);
     return {
-      summary: getVal("#summary"),
-      pageField: getVal("#issue-form > div.modal-content > div:nth-child(12) > div"),
-      details: getVal("#details"),
-      checkpoint: getVal("#combobox"),
-      impact: getVal("#severity-select"),
-      // Standard description text shown on the issue form (used by the Native
-      // Description check). Falls back to any .desc-text if the exact path moves.
-      descText:
-        getVal("#issue-form > div.modal-content > fieldset > div.pure-g > div.desc-text.pure-u-3-5") ||
-        getVal("#issue-form div.desc-text"),
+      summary: getVal("summary"),
+      pageField: getVal("pageField"),
+      details: getVal("details"),
+      checkpoint: getVal("checkpoint"),
+      impact: getVal("severity"),
+      descText: getVal("descText"),
     };
-  }
-
-  // Injected via chrome.scripting.executeScript for the Summary Update tab.
-  // Only touches #summary — the Details field is intentionally left alone,
-  // since the whole point of this tab is the Details text is already correct.
-  function summaryWriter(summaryText) {
-    function setValue(selector, value) {
-      const el = document.querySelector(selector);
-      if (!el) return false;
-
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-        const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-        const desc = Object.getOwnPropertyDescriptor(proto, "value");
-        if (desc && desc.set) {
-          desc.set.call(el, value);
-        } else {
-          el.value = value;
-        }
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        return true;
-      }
-
-      if (el.isContentEditable) {
-        el.textContent = value;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        return true;
-      }
-
-      return false;
-    }
-
-    return { summaryOk: setValue("#summary", summaryText) };
   }
 
   // ---------- Storage helpers (chrome.storage.local in the extension, localStorage on the web) ----------
@@ -1598,65 +1654,32 @@
   // sanityPageExtractor(), injected the same way as the other page readers.
 
   // Injected into the auditor page. Self-contained — no outer-scope refs.
-  function sanityPageExtractor(native) {
-    function getVal(selector) {
-      const el = document.querySelector(selector);
-      if (!el) return "";
-      if (el.tagName === "SELECT") {
-        if (el.selectedIndex >= 0 && el.options[el.selectedIndex]) {
-          return (el.options[el.selectedIndex].text || "").trim();
-        }
-        return (el.value || "").trim();
+  function sanityPageExtractor(native, S) {
+    const H = window.__A11Y_DRAFTER__;
+
+    // Attachments: Web keeps it at div:nth-child(6), Native at nth-child(7)
+    // (see PAGE_SELECTORS.attachments). A file counts when it has one of the
+    // generated edit fields; for Native, attachment names differ per file, so
+    // any image or real file link inside the area also counts.
+    const container = H.attachments(S, !!native);
+    let hasAttachment = false;
+    if (container) {
+      if (container.querySelectorAll(S.attachments.files).length > 0) {
+        hasAttachment = true;
+      } else if (native) {
+        const images = container.querySelectorAll("img");
+        const links = Array.from(container.querySelectorAll("a[href]")).filter((a) => {
+          const h = (a.getAttribute("href") || "").trim();
+          return h && h !== "#" && !/^javascript:/i.test(h);
+        });
+        hasAttachment = images.length > 0 || links.length > 0;
       }
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return (el.value || "").trim();
-      return (el.textContent || "").trim();
     }
-
-    // The attachment area lives at #issue-more-info > fieldset > div:nth-child(6)
-    // (labeled "Attachments" on the page) — it's not a drag/drop widget, so
-    // detection is based on whether that container has any actual attachment
-    // entries (thumbnails, file links/list items) versus being empty.
-    // Each attached screenshot has its own edit field, id'd like
-    // "ws-assure-generated-0", "ws-assure-generated-1", etc., inside the
-    // Attachments container. Presence of at least one such field means the
-    // issue has a screenshot; absence means it doesn't.
-    // Native audits keep Attachments at div:nth-child(7) (Web: nth-child(6)).
-    // For Native the "Attachments" label text is tried first, with that
-    // selector as the fallback, so a small layout shift doesn't break the check.
-    function findNativeAttachments() {
-      const fieldset = document.querySelector("#issue-more-info > fieldset");
-      if (fieldset) {
-        const kids = Array.from(fieldset.children);
-        for (let i = 0; i < kids.length; i++) {
-          if (/^attachments?\b/i.test((kids[i].textContent || "").trim())) return kids[i];
-        }
-      }
-      return document.querySelector("#issue-more-info > fieldset > div:nth-child(7)");
-    }
-
-    function detectScreenshot() {
-      const el = native
-        ? findNativeAttachments()
-        : document.querySelector("#issue-more-info > fieldset > div:nth-child(6)");
-      if (!el) return { found: false, hasScreenshot: false };
-      const editFields = el.querySelectorAll('[id^="ws-assure-generated-"]');
-      if (editFields.length > 0 || !native) return { found: true, hasScreenshot: editFields.length > 0 };
-      // Native: attachment names differ per file, so also accept any image or
-      // real file link inside the Attachments area.
-      const images = el.querySelectorAll("img");
-      const links = Array.from(el.querySelectorAll("a[href]")).filter((a) => {
-        const h = (a.getAttribute("href") || "").trim();
-        return h && h !== "#" && !/^javascript:/i.test(h);
-      });
-      return { found: true, hasScreenshot: images.length > 0 || links.length > 0 };
-    }
-
-    const shot = detectScreenshot();
     return {
-      severity: getVal("#severity-select"),
-      checkpoint: getVal("#combobox"),
-      screenshotFound: shot.found,
-      hasScreenshot: shot.hasScreenshot,
+      severity: H.val(S, "severity"),
+      checkpoint: H.val(S, "checkpoint"),
+      screenshotFound: !!container,
+      hasScreenshot: hasAttachment,
     };
   }
 
@@ -2206,8 +2229,8 @@
           ? "The Attachments section was found but nothing is attached."
           : "The screenshot upload area was found but appears empty."
         : native
-        ? 'Couldn\'t find the Attachments section on the page (looked for the "Attachments" label, then #issue-more-info > fieldset > div:nth-child(7)).'
-        : "Couldn't find the Attachments section (#issue-more-info > fieldset > div:nth-child(6)) on the page.",
+        ? `Couldn't find the Attachments section on the page (looked for the "Attachments" label, then ${PAGE_SELECTORS.attachments.native}).`
+        : `Couldn't find the Attachments section (${PAGE_SELECTORS.attachments.web}) on the page.`,
     });
 
     // Description is optional: only check it when a "Description:" heading is present.
@@ -2386,6 +2409,7 @@
 
       selectAllCheckbox = document.createElement("input");
       selectAllCheckbox.type = "checkbox";
+      selectAllCheckbox.setAttribute("aria-label", "Select all fixes");
       selectAllCheckbox.checked = true;
       selectAllRow.appendChild(selectAllCheckbox);
 
@@ -2421,6 +2445,7 @@
       if (r.needsInput && !r.fix) {
         inputEl = document.createElement("input");
         inputEl.type = "text";
+        inputEl.setAttribute("aria-label", `Value for ${r.name}`);
         inputEl.value = r.inputDefault || "";
         inputEl.placeholder = r.inputPlaceholder || "";
         inputEl.style.fontSize = "11.5px";
@@ -2437,6 +2462,7 @@
       if (r.fix) {
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
+        checkbox.setAttribute("aria-label", `Apply fix: ${r.name}`);
         checkbox.checked = true;
         checkbox.style.marginTop = "3px";
         checkbox.style.flexShrink = "0";
@@ -2521,6 +2547,7 @@
   function buildSanityOutputBlock() {
     const box = document.createElement("div");
     box.textContent = "";
+    box.setAttribute("aria-live", "polite");
     return box;
   }
 
@@ -2535,11 +2562,7 @@
     try {
       const tab = await getTargetTab();
       if (!tab || !tab.id) throw new Error("No active browser tab found.");
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: sanityPageExtractor,
-        args: [!!native],
-      });
+      const results = await injectInPage(tab.id, sanityPageExtractor, [!!native]);
       const liveData = results && results[0] ? results[0].result : {};
       const checks = await runSanityChecks({
         project,
@@ -2580,11 +2603,7 @@
     // anything. If the user clicks Correct again after a check has already
     // been resolved (by a prior Correct, or by anything else), this skips
     // reapplying its fix instead of blindly running it a second time.
-    const liveResults = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: sanityPageExtractor,
-      args: [!!native],
-    });
+    const liveResults = await injectInPage(tab.id, sanityPageExtractor, [!!native]);
     const liveData = liveResults && liveResults[0] ? liveResults[0].result : {};
     const freshChecks = await runSanityChecks({
       project,
@@ -2616,13 +2635,10 @@
       }
     });
 
-    const writeResults = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: pageWriter,
-      args: [summaryText, detailsText],
-    });
+    const writeResults = await injectInPage(tab.id, pageWriter, [summaryText, detailsText]);
     const writeResult = writeResults && writeResults[0] ? writeResults[0].result : null;
     if (!writeResult) throw new Error("Could not write corrections to the page.");
+    noteWritten(summaryText, detailsText);
 
     summaryEl.value = summaryText;
     detailsEl.value = detailsText;
@@ -2711,7 +2727,7 @@
     const row = document.createElement("div");
     row.className = "inline-row";
 
-    const labelCol = document.createElement("span");
+    const labelCol = document.createElement("label"); // wraps the checkbox, so it is the checkbox's accessible name
     labelCol.className = "aligned-label-col";
 
     const checkbox = document.createElement("input");
@@ -2725,6 +2741,7 @@
 
     const input = document.createElement("input");
     input.type = "text";
+    input.setAttribute("aria-label", "Custom prefix");
     input.placeholder = "[MyPrefix]";
     // Same sizing pattern as the Yahoo Platform field, but at roughly half
     // its width — a short prefix like "[Win]" doesn't need much room, and
@@ -3246,9 +3263,11 @@
     const platformLabel = document.createElement("label");
     platformLabel.className = "aligned-label-col";
     platformLabel.textContent = "Platform:";
+    platformLabel.setAttribute("for", "platform-input");
 
     const platformInput = document.createElement("input");
     platformInput.type = "text";
+    platformInput.id = "platform-input";
     platformInput.style.flex = "1";
     platformInput.style.minWidth = "160px";
 
@@ -3600,6 +3619,7 @@
     pageCheckMsg.className = "count-badge";
     errorsSection.appendChild(pageCheckMsg);
 
+    errorsSection.setAttribute("aria-live", "polite"); // status/check changes are announced
     els.content.appendChild(errorsSection);
     els.content.appendChild(descSection);
 
@@ -3626,6 +3646,13 @@
     applyBtn.type = "button";
     applyBtn.textContent = "Update";
     applyRow.appendChild(applyBtn);
+
+    const restoreBtn = buildRestoreButton((text, isErr) => {
+      setStatus(statusMsg, text, isErr);
+      setStatus(applyMsg, text, isErr);
+      sanityOutput.innerHTML = "";
+    });
+    applyRow.appendChild(restoreBtn);
 
     // When checked, a fully-clean Sanity result (either immediately after
     // Update, or after Correct fixes everything) automatically clears this
@@ -3972,10 +3999,7 @@
         if (!tab || !tab.id) {
           throw new Error("No active browser tab found \u2014 click on the auditor page, then try again.");
         }
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: summaryUpdateExtractor,
-        });
+        const results = await injectInPage(tab.id, summaryUpdateExtractor);
         const data = results && results[0] ? results[0].result : null;
         if (!data) throw new Error("Could not read the page.");
 
@@ -4094,14 +4118,15 @@
           remediationWasFixed = true;
         }
 
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: pageWriter,
-          args: [resultTextarea.value, detailsToWrite],
-        });
+        const backupInfo = await backupBeforeWrite(tab.id); // save what's on the page now (for Restore previous)
+        const results = await injectInPage(tab.id, pageWriter, [resultTextarea.value, detailsToWrite]);
         const result = results && results[0] ? results[0].result : null;
         const summaryOk = !!(result && result.summaryOk);
         const detailsOk = !!(result && result.detailsOk);
+        if (summaryOk && detailsOk) {
+          noteWritten(resultTextarea.value, detailsToWrite);
+          if (backupInfo.isNewIssue) bumpTodayCount();
+        }
 
         const extras = [];
         if (stepsWereFixed) extras.push(`Steps numbering corrected (${stepsBefore} \u2192 ${stepsAfter}).`);
@@ -4251,6 +4276,7 @@
     const output = document.createElement("textarea");
     output.className = "template-output template-output-edit";
     output.id = "template-output";
+    output.setAttribute("aria-label", "Output preview (editable)");
     els.content.appendChild(output);
 
     function collectValues() {
@@ -4313,10 +4339,13 @@
     const uploadGroup = document.createElement("div");
     uploadGroup.className = "upload-group";
 
-    const uploadLabel = document.createElement("label");
+    // A real button (the file input is hidden, so a <label for> couldn't be
+    // reached with the keyboard).
+    const uploadLabel = document.createElement("button");
+    uploadLabel.type = "button";
     uploadLabel.className = "upload-btn";
-    uploadLabel.setAttribute("for", "excel-input");
     uploadLabel.textContent = "Upload Excel";
+    uploadLabel.addEventListener("click", () => fileInput.click());
 
     const fileInput = document.createElement("input");
     fileInput.type = "file";
@@ -4370,11 +4399,13 @@
     actionRow.appendChild(getDataBtn);
     actionRow.appendChild(logBtn);
     actionRow.appendChild(clearBtn);
+    actionRow.appendChild(buildRestoreButton((text, isErr) => setStatus(statusMsg, text, isErr)));
     wrap.appendChild(actionRow);
 
     // ---- Status (only shown after Get Data runs) ----
     const statusMsg = document.createElement("div");
     statusMsg.className = "count-badge";
+    statusMsg.setAttribute("role", "status");
     wrap.appendChild(statusMsg);
 
     refreshExcelInfo(excelInfo);
@@ -4397,9 +4428,11 @@
       const name = document.createElement("span");
       name.textContent = stored.name;
 
-      const removeLink = document.createElement("span");
+      const removeLink = document.createElement("button");
+      removeLink.type = "button";
       removeLink.className = "remove-link";
       removeLink.textContent = "Remove";
+      removeLink.setAttribute("aria-label", `Remove stored Excel file ${stored.name}`);
       removeLink.addEventListener("click", async () => {
         await storageRemove("automationExcel");
         invalidateReferenceDataCache();
@@ -4577,13 +4610,14 @@
         const stepInsertion = autoInsertStepOneIfMissing(finalDetailsText, checkpointForSteps);
         finalDetailsText = fixStepsNumberingInDetails(stepInsertion.text, 1);
 
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: pageWriter,
-          args: [updatedTitleInput.value || "", finalDetailsText],
-        });
+        const backupInfo = await backupBeforeWrite(tab.id); // save what's on the page now (for Restore previous)
+        const results = await injectInPage(tab.id, pageWriter, [updatedTitleInput.value || "", finalDetailsText]);
         const result = results && results[0] ? results[0].result : null;
         if (!result) throw new Error("Could not write to the page.");
+        if (result.summaryOk && result.detailsOk) {
+          noteWritten(updatedTitleInput.value || "", finalDetailsText);
+          if (backupInfo.isNewIssue) bumpTodayCount();
+        }
 
         const parts = [
           result.summaryOk ? "Summary filled" : "Summary field (#summary) not found",

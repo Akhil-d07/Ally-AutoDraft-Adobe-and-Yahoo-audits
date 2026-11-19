@@ -605,3 +605,100 @@ details.native-context[open] > summary {
 details.desc-compare {
   margin-top: 2px;
 }
+
+/* ---------- Header: creator credit + daily counter ---------- */
+.header-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.app-version {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #c9d1e0;
+  margin-left: 4px;
+}
+
+.byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.byline-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  min-height: var(--target);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.byline-pill:hover {
+  filter: brightness(1.12);
+  text-decoration: underline;
+}
+
+.byline-pill strong {
+  font-weight: 700;
+}
+
+.gh-icon {
+  flex-shrink: 0;
+}
+
+.counter {
+  font-size: 10.5px;
+  color: #c9d1e0;
+}
+
+/* Text for screen readers only (e.g. "(opens in a new tab)") */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Keyboard focus: every control gets a visible ring ---------- */
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[role="tab"]:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.app-header a:focus-visible {
+  outline-color: #8fb0ff; /* the blue ring needs to read on the dark header */
+}
+
+.copy-btn:disabled {
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* "Remove" next to the stored Excel name is a real <button> now */
+.excel-info .remove-link {
+  appearance: none;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11.5px;
+}
