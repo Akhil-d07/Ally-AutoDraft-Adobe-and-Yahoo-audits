@@ -489,3 +489,119 @@ input[type="radio"] {
 html, body.floating-window {
   height: 100%;
 }
+/* ---------- Native: context block + Description comparison ---------- */
+#native-context-input {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 190px;
+}
+
+/* Locked (read-only) block: same text, dimmed so it reads as "set" */
+#native-context-input:read-only {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* Row of small action buttons (Lock, Suggest rewrite, Revert) */
+.native-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.compare-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin: 6px 0 2px;
+}
+
+.compare-text {
+  background: #fafbfc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Words that appear in both texts. Bold + underline as well as the
+   background, so the cue doesn't depend on color alone. */
+.compare-text mark.match-word {
+  background: #fff1b8;
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* Match percentage: always paired with words ("too similar" / "different
+   enough"), the color is only a reinforcement. Both pass 4.5:1 on white
+   (red 6.5:1, green 6.1:1). */
+.match-high { color: #b3261e; font-weight: 700; }
+.match-low  { color: #17713c; font-weight: 700; }
+
+/* ---------- Clean-up: collapsible sections + optional Description ---------- */
+
+/* "Add a Description (optional)" checkbox row */
+.desc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--target);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.desc-body {
+  margin-top: 6px;
+}
+
+/* Native context block and "Compare with the Summary" are native
+   <details>/<summary>: keyboard- and screen-reader-operable by default. */
+details.native-context > summary,
+details.desc-compare > summary {
+  /* keep display:list-item so the disclosure triangle stays visible */
+  padding: 4px 0;
+  min-height: var(--target);
+  cursor: pointer;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+details.native-context > summary {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+details.desc-compare > summary {
+  font-size: 11.5px;
+}
+
+details.native-context > summary:focus-visible,
+details.desc-compare > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+details.native-context[open] > summary {
+  margin-bottom: 4px;
+}
+
+details.desc-compare {
+  margin-top: 2px;
+}

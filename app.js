@@ -268,6 +268,10 @@
       pageName: getVal("#issue-form > div.modal-content > div:nth-child(12) > div"),
       defaultSummaryFlag: getVal("#default-summary"),
       description: getVal("#custom-description"),
+      // Standard description text from the issue form (Description panel).
+      descText:
+        getVal("#issue-form > div.modal-content > fieldset > div.pure-g > div.desc-text.pure-u-3-5") ||
+        getVal("#issue-form div.desc-text"),
       impact: getVal("#severity-select"),
       sourceCode: getSourceCode(),
       recommendation: getVal("#notes"),
@@ -337,6 +341,11 @@
       details: getVal("#details"),
       checkpoint: getVal("#combobox"),
       impact: getVal("#severity-select"),
+      // Standard description text shown on the issue form (used by the Native
+      // Description check). Falls back to any .desc-text if the exact path moves.
+      descText:
+        getVal("#issue-form > div.modal-content > fieldset > div.pure-g > div.desc-text.pure-u-3-5") ||
+        getVal("#issue-form div.desc-text"),
     };
   }
 
@@ -726,10 +735,11 @@
     return row;
   }
 
-  // Storage key for a Native App Context lock, kept separate per Device Type
-  // (Android Native vs iOS Native have different devices/app versions/etc.).
+  // Storage key for the pasted + locked Native App Context block, kept
+  // separate per Device Type (Android Native vs iOS Native have different
+  // devices/app versions/etc.). New key: the old per-field format is not reused.
   function nativeContextStorageKeyFor(deviceType) {
-    return `nativeContext:${deviceType}`;
+    return `nativeContextText:${deviceType}`;
   }
 
   // Locates the combined "Environment:" ... "Context:" region of Details, up
@@ -746,25 +756,6 @@
     return { sectionStart, sectionEnd, content: str.slice(sectionStart, sectionEnd) };
   }
 
-  // Builds the Environment/Context block for Native app testing (iOS/Android),
-  // used in place of the Platform URL / OS / Browser fields that only apply
-  // to Web audits. Same shape for both Adobe and Yahoo projects.
-  function buildNativeEnvironmentContextBlock(fields) {
-    const f = fields || {};
-    return [
-      "Environment:",
-      `Testing Application: ${f.testingApplication || ""}`,
-      `Authentication State: ${f.authState || ""}`,
-      "",
-      "Context:",
-      `Device: ${f.device || ""}`,
-      `Operating System: ${f.os || ""}`,
-      `${f.os || "OS"} Version: ${f.osVersion || ""}`,
-      `${f.testingApplication || "Application"} Version: ${f.appVersion || ""}`,
-      `${f.toolDescription || ""}`,
-    ].join("\n");
-  }
-
   // Replaces the Environment+Context region (using offsets from
   // locateEnvironmentContextSection) with newBlock, normalizing spacing.
   function spliceEnvironmentContextIntoDetails(fullText, loc, newBlock) {
@@ -773,6 +764,583 @@
     const prefix = before ? before + "\n\n" : "";
     return `${prefix}${newBlock}\n\n${after}`;
   }
+
+  // ==== NATIVE HELPERS START ====
+  //
+  // Native (Android / iOS) report helpers used by the Summary Update tab.
+  //
+  // The user pastes ONE "Environment & Context" block per Device Type and
+  // locks it. Everything in that block is used exactly as pasted, except the
+  // last "<Device> using ..." line, which changes with the issue type:
+  //   Application      -> "Android Phone using the Adobe Premiere application"
+  //   Screen reader    -> "Android Phone using TalkBack screen reader"
+  //   Color contrast   -> "Android Phone using the Deque Color Contrast Analyzer tool"
+  // (iOS: "iPhone" / "VoiceOver".) The application name comes from the
+  // pasted "Testing Application:" line, so switching products only means
+  // updating the locked block.
+
+  const NATIVE_TOOL_LABELS = {
+    app: "Application",
+    screenReader: "Screen reader",
+    contrast: "Color Contrast Analyzer",
+  };
+
+  function nativeDevicePhrase(deviceType) {
+    return deviceType === "iOS Native" ? "iPhone" : "Android Phone";
+  }
+
+  function nativeScreenReaderName(deviceType) {
+    return deviceType === "iOS Native" ? "VoiceOver" : "TalkBack";
+  }
+
+  function buildNativeToolLine(deviceType, variant, appName) {
+    const device = nativeDevicePhrase(deviceType);
+    if (variant === "screenReader") return `${device} using ${nativeScreenReaderName(deviceType)} screen reader`;
+    if (variant === "contrast") return `${device} using the Deque Color Contrast Analyzer tool`;
+    return appName ? `${device} using the ${appName} application` : `${device} using the application`;
+  }
+
+  // Splits the pasted block into trimmed lines and finds the pieces we care
+  // about. toolIdx is the LAST non-empty line after "Context:" when it is an
+  // unlabeled line (no "Label:" prefix) — that is the line that gets
+  // regenerated; -1 means there isn't one yet and it will be appended.
+  function parseNativeContextTemplate(text) {
+    const lines = String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((l) => l.replace(/\s+$/, ""));
+    while (lines.length && !lines[0].trim()) lines.shift();
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+
+    const appLine = lines.find((l) => /^\s*testing application\s*:/i.test(l));
+    const appName = appLine ? appLine.replace(/^\s*testing application\s*:\s*/i, "").trim() : "";
+    const hasEnvironment = lines.some((l) => /^\s*environment\s*:\s*$/i.test(l));
+    const contextIdx = lines.findIndex((l) => /^\s*context\s*:\s*$/i.test(l));
+
+    let toolIdx = -1;
+    if (contextIdx !== -1 && lines.length - 1 > contextIdx) {
+      const last = lines[lines.length - 1].trim();
+      if (last && !/^[^:]{1,40}:/.test(last)) toolIdx = lines.length - 1;
+    }
+    return { lines, appName, hasEnvironment, hasContext: contextIdx !== -1, contextIdx, toolIdx };
+  }
+
+  function buildNativeEnvironmentContextFromTemplate(templateText, deviceType, variant) {
+    const parsed = parseNativeContextTemplate(templateText);
+    if (!parsed.lines.length) return "";
+    const lines = parsed.lines.slice();
+    const toolLine = buildNativeToolLine(deviceType, variant, parsed.appName);
+    if (parsed.toolIdx !== -1) lines[parsed.toolIdx] = toolLine;
+    else lines.push(toolLine);
+    return lines.join("\n");
+  }
+
+  // The part of Details that describes what the tester did / saw (Steps,
+  // Expected, Actual) — used to guess the issue type. Context and Remediation
+  // are left out on purpose so a leftover tool line can't bias the guess.
+  function nativeIssueBodyText(details) {
+    const str = String(details || "");
+    const start = str.search(/steps to reproduce\s*:/i);
+    if (start === -1) return "";
+    const rest = str.slice(start);
+    const end = rest.search(/affected user population\s*:/i);
+    return end === -1 ? rest : rest.slice(0, end);
+  }
+
+  function detectNativeToolVariant(ctx) {
+    const sc = extractScCode(ctx.checkpoint);
+    if (sc === "1.4.3" || sc === "1.4.6" || sc === "1.4.11") return "contrast";
+    const blob = `${ctx.checkpoint || ""} ${ctx.title || ""} ${ctx.pageDesc || ""} ${nativeIssueBodyText(ctx.details)}`.toLowerCase();
+    if (/contrast/.test(blob)) return "contrast";
+    if (/talkback|voiceover|screen reader|announce|swipe/.test(blob)) return "screenReader";
+    return "app";
+  }
+
+  // ---- Section headings & spacing ----
+
+  const NATIVE_HEADERS = [
+    "description",
+    "environment",
+    "context",
+    "steps to reproduce",
+    "expected results",
+    "actual results",
+    "affected user population",
+    "applicable wcag success criterion",
+    "code snippet",
+    "remediation recommendation",
+    "resource link",
+    "reference link",
+    "references",
+    "screen name",
+    "labels",
+  ];
+
+  // A heading is a line that is ONLY "<known heading>:" — so a sentence that
+  // merely contains one of these words is never mistaken for a heading.
+  function isNativeHeaderLine(line) {
+    const t = String(line || "").trim();
+    if (!t.endsWith(":")) return false;
+    return NATIVE_HEADERS.indexOf(t.slice(0, -1).trim().toLowerCase()) !== -1;
+  }
+
+  // Exactly one blank line BEFORE every heading, none right AFTER it, and no
+  // trailing spaces. Blank lines inside a section (e.g. between remediation
+  // techniques) are left alone.
+  function normalizeNativeSectionSpacing(text) {
+    const src = String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((l) => l.replace(/[ \t]+$/, ""));
+    const out = [];
+    for (let i = 0; i < src.length; i++) {
+      const line = src[i];
+      if (isNativeHeaderLine(line)) {
+        while (out.length && out[out.length - 1].trim() === "") out.pop();
+        if (out.length) out.push("");
+        out.push(line.trim());
+        while (i + 1 < src.length && src[i + 1].trim() === "") i++;
+        continue;
+      }
+      out.push(line);
+    }
+    while (out.length && out[0].trim() === "") out.shift();
+    while (out.length && out[out.length - 1].trim() === "") out.pop();
+    return out.join("\n");
+  }
+
+  // Native audits have no code snippet, so the whole "Code Snippet:" section
+  // (heading + whatever sits under it, up to the next heading) is dropped.
+  function removeCodeSnippetSection(text) {
+    const out = [];
+    let skipping = false;
+    String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .forEach((line) => {
+        if (/^\s*code snippet\s*:/i.test(line)) {
+          skipping = true;
+          return;
+        }
+        if (skipping && isNativeHeaderLine(line)) skipping = false;
+        if (!skipping) out.push(line);
+      });
+    return out.join("\n");
+  }
+
+  function hasCodeSnippetSection(text) {
+    return /^\s*code snippet\s*:/im.test(String(text || ""));
+  }
+
+  // "Description:" is only recognised at the very top of Details, ending where
+  // "Environment:" begins.
+  function locateDescriptionSection(text) {
+    const str = String(text || "");
+    const head = str.match(/^\s*description\s*:[ \t]*/i);
+    if (!head) return null;
+    const afterHead = str.slice(head[0].length);
+    const envMatch = afterHead.match(/(^|\n)[ \t]*environment\s*:/i);
+    if (!envMatch) return null;
+    return {
+      sectionEnd: head[0].length + envMatch.index + envMatch[1].length,
+      content: afterHead.slice(0, envMatch.index).trim(),
+    };
+  }
+
+  function stripDescriptionSection(text) {
+    const loc = locateDescriptionSection(text);
+    return loc ? String(text).slice(loc.sectionEnd) : String(text || "");
+  }
+
+  function insertDescriptionSection(text, description) {
+    const d = String(description || "").trim();
+    if (!d) return String(text || "");
+    return normalizeNativeSectionSpacing(`Description:\n${d}\n\n${stripDescriptionSection(text).replace(/^\s+/, "")}`);
+  }
+
+  // Builds the final Details for a native issue: Description on top, the
+  // locked Environment/Context block, no Code Snippet, uniform spacing.
+  // Safe to run repeatedly on its own output.
+  function assembleNativeDetails({ details, envContextBlock, description }) {
+    // description === null means "no Description wanted": leave whatever is there alone.
+    let t = description === null ? String(details || "") : stripDescriptionSection(details);
+    const block = String(envContextBlock || "").trim();
+    if (block) {
+      const loc = locateEnvironmentContextSection(t);
+      t = loc ? spliceEnvironmentContextIntoDetails(t, loc, block) : `${block}\n\n${t.replace(/^\s+/, "")}`;
+    }
+    t = removeCodeSnippetSection(t);
+    const d = String(description || "").trim();
+    if (d) t = `Description:\n${d}\n\n${t.replace(/^\s+/, "")}`;
+    return normalizeNativeSectionSpacing(t);
+  }
+
+  // ---- Word match (Description vs Summary) ----
+
+  const MATCH_STOP_WORDS = new Set([
+    "a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "with", "is", "are", "was", "were",
+    "be", "as", "at", "by", "it", "its", "this", "that", "these", "those", "from",
+  ]);
+
+  function normalizeMatchWord(w) {
+    return String(w || "")
+      .toLowerCase()
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  }
+
+  // Unique content words (stop words dropped unless that would leave nothing).
+  function contentWords(text) {
+    const all = String(text || "").split(/\s+/).map(normalizeMatchWord).filter(Boolean);
+    const filtered = all.filter((w) => !MATCH_STOP_WORDS.has(w));
+    return Array.from(new Set(filtered.length ? filtered : all));
+  }
+
+  // Dice coefficient over unique content words, as a whole percentage:
+  // 2 x shared / (words in A + words in B).
+  function wordMatchPercent(a, b) {
+    const A = contentWords(a);
+    const B = new Set(contentWords(b));
+    if (!A.length || !B.size) return 0;
+    let shared = 0;
+    A.forEach((w) => {
+      if (B.has(w)) shared++;
+    });
+    return Math.round(((2 * shared) / (A.length + B.size)) * 100);
+  }
+
+  // ---- Free, offline rule-based rewriter ----
+  //
+  // Swaps common accessibility-report phrasing for equivalent wording. Each
+  // rule has a few alternatives; `variant` rotates through them so clicking
+  // "Suggest rewrite" again gives a different wording. Replacements are parked
+  // in placeholders so one rule can never re-rewrite another rule's output.
+  const REWRITE_RULES = [
+    [/\bshould not\b/gi, ["must not"]],
+    [/\bshould be\b/gi, ["needs to be", "must be"]],
+    [/\bshould\b/gi, ["needs to", "must"]],
+    [/\bdoes not have\b/gi, ["lacks", "is missing"]],
+    [/\bdo not have\b/gi, ["lack", "are missing"]],
+    [/\bdoes not(?=\s+[a-z])/gi, ["fails to", "is unable to"]],
+    [/\bdo not(?=\s+[a-z])/gi, ["fail to", "are unable to"]],
+    [/\bis not accessible\b/gi, ["is inaccessible"]],
+    [/\bare not accessible\b/gi, ["are inaccessible"]],
+    [/\bappears to\b/gi, ["seems to"]],
+    [/\bappears\b/gi, ["looks", "is displayed"]],
+    [/\bfunctions like\b/gi, ["acts like", "behaves like"]],
+    [/\bfunctions as\b/gi, ["acts as", "serves as"]],
+    [/\bmarked up\b/gi, ["coded", "tagged"]],
+    [/\bannounces\b/gi, ["reads out"]],
+    [/\bannouncing\b/gi, ["reading out"]],
+    [/\bannounced\b/gi, ["read out"]],
+    [/\bannounce\b/gi, ["read out"]],
+    [/\bconveys\b/gi, ["communicates"]],
+    [/\bconveyed\b/gi, ["communicated"]],
+    [/\bconvey\b/gi, ["communicate"]],
+    [/\bprovides\b/gi, ["offers"]],
+    [/\bprovided\b/gi, ["offered"]],
+    [/\bprovide\b/gi, ["offer"]],
+    [/\binsufficient\b/gi, ["inadequate"]],
+    [/\bincorrectly\b/gi, ["improperly"]],
+    [/\bincorrect\b/gi, ["improper", "wrong"]],
+    [/\bproperly\b/gi, ["correctly"]],
+    [/\busers\b/gi, ["people", "individuals"]],
+    [/\bbut\b/gi, ["yet"]],
+  ];
+
+  function matchCase(original, replacement) {
+    return /^[A-Z]/.test(original) ? replacement.charAt(0).toUpperCase() + replacement.slice(1) : replacement;
+  }
+
+  // Returns the rewritten sentence, or the (whitespace-normalised) original
+  // when no rule applied — the caller treats "unchanged" as "no suggestion".
+  function ruleBasedRewrite(text, variant) {
+    const src = String(text || "").replace(/\s+/g, " ").trim();
+    if (!src) return "";
+    const slots = [];
+    let out = src;
+    REWRITE_RULES.forEach(([re, options]) => {
+      out = out.replace(re, (m) => {
+        slots.push(matchCase(m, options[(variant || 0) % options.length]));
+        return `\u0001${slots.length - 1}\u0002`;
+      });
+    });
+    if (!slots.length) return src;
+    out = out.replace(/\u0001(\d+)\u0002/g, (_, i) => slots[Number(i)]);
+
+    // Fix "a"/"an" in front of words this rewriter introduced.
+    Array.from(new Set(slots.map((s) => s.split(" ")[0].toLowerCase()))).forEach((w) => {
+      const article = /^[aeiou]/.test(w) ? "an" : "a";
+      out = out.replace(new RegExp(`\\b(a|an)(\\s+)(${w})\\b`, "gi"), (m, art, sp, word) => {
+        const fixed = /^[A-Z]/.test(art) ? article.charAt(0).toUpperCase() + article.slice(1) : article;
+        return `${fixed}${sp}${word}`;
+      });
+    });
+
+    out = out.replace(/\s+/g, " ").trim();
+    out = out.charAt(0).toUpperCase() + out.slice(1);
+    if (!/[.!?]$/.test(out)) out += ".";
+    return out;
+  }
+  // ==== NATIVE HELPERS END ====
+
+  // ==== DESCRIPTION PANEL START ====
+  //
+  // Optional "Description:" section that sits above "Environment:" in the
+  // issue Details. One reusable panel, used by the Summary Update tab (every
+  // Device Type) and the Automation Template tab.
+  //
+  // Source text is the issue form's own desc-text. It is compared (word match)
+  // with the Summary title: under DESC_AUTOFILL_BELOW % it is filled in as-is,
+  // otherwise the user is asked to reword it (rule-based suggestion or manual).
+
+  const DESC_AUTOFILL_BELOW = 25;
+
+  // Description on top of an existing Details text (replacing any Description
+  // already there). Spacing elsewhere is left exactly as it was.
+  function prependDescription(text, description) {
+    const d = String(description || "").trim();
+    if (!d) return String(text || "");
+    return `Description:\n${d}\n\n${stripDescriptionSection(text).replace(/^\s+/, "")}`;
+  }
+
+  // Matched words get a <mark> (bold + underline in CSS, so it doesn't rely on color alone).
+  function renderCompareText(container, text, otherText) {
+    container.innerHTML = "";
+    if (!text) {
+      container.textContent = "(empty)";
+      return;
+    }
+    const other = new Set(contentWords(otherText));
+    String(text)
+      .split(/(\s+)/)
+      .forEach((part) => {
+        if (!part) return;
+        const norm = normalizeMatchWord(part);
+        if (part.trim() && norm && other.has(norm) && !MATCH_STOP_WORDS.has(norm)) {
+          const mark = document.createElement("mark");
+          mark.className = "match-word";
+          mark.textContent = part;
+          container.appendChild(mark);
+        } else {
+          container.appendChild(document.createTextNode(part));
+        }
+      });
+  }
+
+  // getTitle(): the Summary title to compare against.
+  // onChange(): called whenever the Description text / checkbox changes
+  //             (the Automation tab uses it to keep its output preview in sync).
+  // Returned API: { el, load, reset, isEnabled, getText, useStorageKey, syncOutput }.
+  function buildDescriptionPanel({ getTitle, onChange }) {
+    let enabled = false;
+    let storageKey = null;
+    let source = null; // { pageDesc, existing }
+    let original = ""; // existing Description in Details, else the page's desc-text
+    let rewriteCount = 0; // rotates the rule-based wording on each Suggest rewrite
+    let lastAuto = ""; // last auto-filled value (so a repeat Get Data won't overwrite the user's edits)
+    const notify = () => {
+      if (onChange) onChange();
+    };
+    const title = () => String(getTitle() || "");
+
+    const el = document.createElement("div");
+    el.className = "errors-section";
+
+    const toggle = document.createElement("label");
+    toggle.className = "desc-toggle";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    toggle.appendChild(checkbox);
+    toggle.appendChild(document.createTextNode("Add a Description (optional)"));
+    el.appendChild(toggle);
+
+    const body = document.createElement("div");
+    body.className = "desc-body";
+    body.style.display = "none";
+    el.appendChild(body);
+
+    const status = document.createElement("div");
+    status.className = "count-badge";
+    status.setAttribute("role", "status");
+    body.appendChild(status);
+
+    const matchLine = document.createElement("div");
+    matchLine.className = "count-badge";
+    matchLine.setAttribute("role", "status");
+    body.appendChild(matchLine);
+
+    const compare = document.createElement("details");
+    compare.className = "desc-compare";
+    const compareSummary = document.createElement("summary");
+    compareSummary.textContent = "Compare with the Summary";
+    const pageLabel = document.createElement("div");
+    pageLabel.className = "compare-label";
+    const pageView = document.createElement("div");
+    pageView.className = "compare-text";
+    const sumLabel = document.createElement("div");
+    sumLabel.className = "compare-label";
+    sumLabel.textContent = "Summary (title)";
+    const sumView = document.createElement("div");
+    sumView.className = "compare-text";
+    [compareSummary, pageLabel, pageView, sumLabel, sumView].forEach((n) => compare.appendChild(n));
+    body.appendChild(compare);
+
+    const block = buildFieldBlock("Description (goes above Environment)", "");
+    block.style.marginTop = "6px";
+    const textarea = block.querySelector("textarea");
+    textarea.setAttribute("aria-label", "Description (goes above Environment)");
+    body.appendChild(block);
+
+    const actions = document.createElement("div");
+    actions.className = "native-actions";
+    const suggestBtn = document.createElement("button");
+    suggestBtn.className = "action-btn";
+    suggestBtn.type = "button";
+    suggestBtn.textContent = "Suggest rewrite";
+    const revertBtn = document.createElement("button");
+    revertBtn.className = "copy-btn";
+    revertBtn.type = "button";
+    revertBtn.textContent = "Revert to original";
+    actions.appendChild(suggestBtn);
+    actions.appendChild(revertBtn);
+    body.appendChild(actions);
+
+    function applyEnabledUi() {
+      checkbox.checked = enabled;
+      body.style.display = enabled ? "" : "none";
+    }
+
+    // One line: "<page text> vs Summary: NN% (...) · Your Description vs Summary: NN% (...)"
+    function renderMatch() {
+      matchLine.innerHTML = "";
+      const t = title();
+      const parts = [];
+      if (original && t) parts.push([source && source.existing ? "Existing Description" : "Page text", wordMatchPercent(original, t)]);
+      const own = textarea.value.trim();
+      if (own && t) parts.push(["Your Description", wordMatchPercent(own, t)]);
+      parts.forEach(([label, pct], i) => {
+        const high = pct >= DESC_AUTOFILL_BELOW;
+        if (i) matchLine.appendChild(document.createTextNode(" \u00B7 "));
+        matchLine.appendChild(document.createTextNode(`${label} vs Summary: `));
+        const value = document.createElement("span");
+        value.className = high ? "match-high" : "match-low";
+        value.textContent = `${pct}%`;
+        matchLine.appendChild(value);
+        matchLine.appendChild(document.createTextNode(high ? " (too similar)" : " (different enough)"));
+      });
+    }
+
+    function render() {
+      if (!source) return;
+      const t = title();
+      const existing = source.existing || "";
+      original = existing || source.pageDesc || "";
+      rewriteCount = 0;
+
+      pageLabel.textContent = existing ? "Description already in Details" : "Page description (desc-text)";
+      renderCompareText(pageView, original, t);
+      renderCompareText(sumView, t, original);
+
+      const keepUser = !!textarea.value.trim() && textarea.value !== lastAuto;
+
+      if (!original) {
+        if (!keepUser) textarea.value = "";
+        setStatus(
+          status,
+          "Couldn't read the page description (desc-text) and Details has no Description \u2014 type it in your own words.",
+          true
+        );
+      } else {
+        const pct = wordMatchPercent(original, t);
+        if (pct < DESC_AUTOFILL_BELOW) {
+          if (!keepUser) {
+            textarea.value = original;
+            lastAuto = original;
+          }
+          setStatus(status, `Under ${DESC_AUTOFILL_BELOW}% match \u2014 filled in automatically. Edit it if you want different wording.`, false);
+        } else {
+          if (!keepUser) {
+            textarea.value = existing;
+            lastAuto = existing;
+          }
+          setStatus(status, "Too close to the Summary \u2014 click Suggest rewrite, or write it in your own words.", true);
+        }
+      }
+      renderMatch();
+      notify();
+    }
+
+    checkbox.addEventListener("change", () => {
+      enabled = checkbox.checked;
+      if (storageKey) storageSet(storageKey, { enabled });
+      applyEnabledUi();
+      if (enabled && source && !textarea.value.trim()) render();
+      else notify();
+    });
+
+    textarea.addEventListener("input", () => {
+      renderMatch();
+      notify();
+    });
+
+    suggestBtn.addEventListener("click", () => {
+      if (!original) {
+        setStatus(status, "Nothing to rewrite yet \u2014 click Get Data, or type the Description yourself.", true);
+        return;
+      }
+      const suggestion = ruleBasedRewrite(original, rewriteCount);
+      rewriteCount += 1;
+      if (suggestion.replace(/[.!?]$/, "") === original.replace(/\s+/g, " ").trim().replace(/[.!?]$/, "")) {
+        setStatus(status, "No rewrite rule matched this sentence \u2014 please write it in your own words.", true);
+        return;
+      }
+      textarea.value = suggestion;
+      renderMatch();
+      setStatus(status, "Rule-based suggestion added \u2014 read it, edit if needed, or click Suggest rewrite again for another wording.", false);
+      notify();
+    });
+
+    revertBtn.addEventListener("click", () => {
+      if (!original) return;
+      textarea.value = original;
+      renderMatch();
+      setStatus(status, "Reverted to the original text.", false);
+      notify();
+    });
+
+    setStatus(status, "Click Get Data to compare the page description with the Summary.", false);
+
+    return {
+      el,
+      syncOutput: null, // set by the Automation tab
+      isEnabled: () => enabled,
+      getText: () => textarea.value.trim(),
+      load(src) {
+        source = src;
+        render();
+      },
+      reset() {
+        source = null;
+        original = "";
+        rewriteCount = 0;
+        lastAuto = "";
+        textarea.value = "";
+        pageView.innerHTML = "";
+        sumView.innerHTML = "";
+        matchLine.innerHTML = "";
+        setStatus(status, "Click Get Data to compare the page description with the Summary.", false);
+      },
+      // Loads (or defaults) the checkbox state saved under `key`.
+      async useStorageKey(key, defaultEnabled) {
+        storageKey = key;
+        const saved = await storageGet(key);
+        enabled = saved && typeof saved.enabled === "boolean" ? saved.enabled : !!defaultEnabled;
+        applyEnabledUi();
+        notify();
+      },
+    };
+  }
+  // ==== DESCRIPTION PANEL END ====
 
   // Auto-fix applied on Update/Log Issue: within the Steps to Reproduce
   // section only, turns 'quoted text' into "quoted text" (single quotes used
@@ -1030,7 +1598,7 @@
   // sanityPageExtractor(), injected the same way as the other page readers.
 
   // Injected into the auditor page. Self-contained — no outer-scope refs.
-  function sanityPageExtractor() {
+  function sanityPageExtractor(native) {
     function getVal(selector) {
       const el = document.querySelector(selector);
       if (!el) return "";
@@ -1052,11 +1620,35 @@
     // "ws-assure-generated-0", "ws-assure-generated-1", etc., inside the
     // Attachments container. Presence of at least one such field means the
     // issue has a screenshot; absence means it doesn't.
+    // Native audits keep Attachments at div:nth-child(7) (Web: nth-child(6)).
+    // For Native the "Attachments" label text is tried first, with that
+    // selector as the fallback, so a small layout shift doesn't break the check.
+    function findNativeAttachments() {
+      const fieldset = document.querySelector("#issue-more-info > fieldset");
+      if (fieldset) {
+        const kids = Array.from(fieldset.children);
+        for (let i = 0; i < kids.length; i++) {
+          if (/^attachments?\b/i.test((kids[i].textContent || "").trim())) return kids[i];
+        }
+      }
+      return document.querySelector("#issue-more-info > fieldset > div:nth-child(7)");
+    }
+
     function detectScreenshot() {
-      const el = document.querySelector("#issue-more-info > fieldset > div:nth-child(6)");
+      const el = native
+        ? findNativeAttachments()
+        : document.querySelector("#issue-more-info > fieldset > div:nth-child(6)");
       if (!el) return { found: false, hasScreenshot: false };
       const editFields = el.querySelectorAll('[id^="ws-assure-generated-"]');
-      return { found: true, hasScreenshot: editFields.length > 0 };
+      if (editFields.length > 0 || !native) return { found: true, hasScreenshot: editFields.length > 0 };
+      // Native: attachment names differ per file, so also accept any image or
+      // real file link inside the Attachments area.
+      const images = el.querySelectorAll("img");
+      const links = Array.from(el.querySelectorAll("a[href]")).filter((a) => {
+        const h = (a.getAttribute("href") || "").trim();
+        return h && h !== "#" && !/^javascript:/i.test(h);
+      });
+      return { found: true, hasScreenshot: images.length > 0 || links.length > 0 };
     }
 
     const shot = detectScreenshot();
@@ -1568,6 +2160,7 @@
     severityText,
     checkpointText,
     customPrefix,
+    native,
   }) {
     const results = [];
 
@@ -1604,14 +2197,35 @@
     });
 
     results.push({
-      name: "Attachments: Screenshot",
+      name: native ? "Attachments" : "Attachments: Screenshot",
       ok: !!hasScreenshot,
       detail: hasScreenshot
         ? ""
         : screenshotFound
-        ? "The screenshot upload area was found but appears empty."
+        ? native
+          ? "The Attachments section was found but nothing is attached."
+          : "The screenshot upload area was found but appears empty."
+        : native
+        ? 'Couldn\'t find the Attachments section on the page (looked for the "Attachments" label, then #issue-more-info > fieldset > div:nth-child(7)).'
         : "Couldn't find the Attachments section (#issue-more-info > fieldset > div:nth-child(6)) on the page.",
     });
+
+    // Description is optional: only check it when a "Description:" heading is present.
+    const descLoc = locateDescriptionSection(detailsText);
+    if (descLoc) {
+      const descOk = descLoc.content.length > 0;
+      results.push({
+        name: "Description:",
+        ok: descOk,
+        detail: descOk ? "" : 'The "Description:" heading has no text under it.',
+        needsInput: {
+          target: "details",
+          apply: (text, other, userValue) => insertDescriptionSection(text, userValue),
+        },
+        inputDefault: "",
+        inputPlaceholder: "Type the Description",
+      });
+    }
 
     const authCheck = checkAuthenticationState(detailsText);
     results.push({
@@ -1624,26 +2238,29 @@
       inputPlaceholder: authCheck.inputPlaceholder,
     });
 
-    const stepOneUrlCheck = checkStepOneOpensUrl(detailsText, checkpointText);
-    let stepOneFix;
-    let stepOneSuggestion;
-    if (!stepOneUrlCheck.ok) {
-      const insertion = autoInsertStepOneIfMissing(detailsText, checkpointText);
-      if (insertion.changed) {
-        stepOneSuggestion = `1. ${insertion.stepText}`;
-        stepOneFix = {
-          target: "details",
-          apply: (text) => fixStepsNumberingInDetails(autoInsertStepOneIfMissing(text, checkpointText).text, 1),
-        };
+    // Native apps have no URL to open, so the Step 1 URL check is skipped.
+    if (!native) {
+      const stepOneUrlCheck = checkStepOneOpensUrl(detailsText, checkpointText);
+      let stepOneFix;
+      let stepOneSuggestion;
+      if (!stepOneUrlCheck.ok) {
+        const insertion = autoInsertStepOneIfMissing(detailsText, checkpointText);
+        if (insertion.changed) {
+          stepOneSuggestion = `1. ${insertion.stepText}`;
+          stepOneFix = {
+            target: "details",
+            apply: (text) => fixStepsNumberingInDetails(autoInsertStepOneIfMissing(text, checkpointText).text, 1),
+          };
+        }
       }
+      results.push({
+        name: "Steps to reproduce: Step 1 Opens the URL",
+        ok: stepOneUrlCheck.ok,
+        detail: stepOneUrlCheck.detail,
+        suggestedText: stepOneSuggestion,
+        fix: stepOneFix,
+      });
     }
-    results.push({
-      name: "Steps to reproduce: Step 1 Opens the URL",
-      ok: stepOneUrlCheck.ok,
-      detail: stepOneUrlCheck.detail,
-      suggestedText: stepOneSuggestion,
-      fix: stepOneFix,
-    });
 
     const stepsCheck = checkStepsIssueTypeConsistency(detailsText);
     results.push({
@@ -1696,6 +2313,37 @@
         detail: severityCheck.detail,
         suggestedText: severityCheck.suggestedText,
         fix: severityCheck.fix,
+      });
+    }
+
+    if (native) {
+      // Kept last so their fixes run after every other fix has been applied.
+      const snippetOk = !hasCodeSnippetSection(detailsText);
+      results.push({
+        name: "Code Snippet: Not used in Native",
+        ok: snippetOk,
+        detail: snippetOk ? "" : 'A "Code Snippet:" section is present \u2014 native issues don\'t have one.',
+        suggestedText: snippetOk ? undefined : '(remove "Code Snippet:" and its spacing)',
+        fix: snippetOk
+          ? undefined
+          : {
+              target: "details",
+              apply: (text) => normalizeNativeSectionSpacing(removeCodeSnippetSection(text)),
+            },
+      });
+
+      const plainDetails = String(detailsText || "").replace(/\r/g, "").replace(/\s+$/, "");
+      const spacingOk = normalizeNativeSectionSpacing(detailsText) === plainDetails;
+      results.push({
+        name: "Sections: Heading spacing",
+        ok: spacingOk,
+        detail: spacingOk
+          ? ""
+          : "Each heading (Description:, Environment:, Context:, \u2026) needs exactly one blank line before it, none after it, and no trailing spaces.",
+        suggestedText: spacingOk ? undefined : "(one blank line before every heading)",
+        fix: spacingOk
+          ? undefined
+          : { target: "details", apply: (text) => normalizeNativeSectionSpacing(text) },
       });
     }
 
@@ -1883,13 +2531,14 @@
   // (kept in sync with the page) or a plain `{ value }` holder. customPrefix,
   // if provided, means Summary Format is checked against ONLY that custom
   // pattern instead of the normal Adobe/Yahoo convention.
-  async function runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean }) {
+  async function runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean, native }) {
     try {
       const tab = await getTargetTab();
       if (!tab || !tab.id) throw new Error("No active browser tab found.");
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: sanityPageExtractor,
+        args: [!!native],
       });
       const liveData = results && results[0] ? results[0].result : {};
       const checks = await runSanityChecks({
@@ -1901,10 +2550,11 @@
         severityText: liveData.severity,
         checkpointText: liveData.checkpoint,
         customPrefix,
+        native,
       });
       renderSanityResults(outputEl, checks, {
         onCorrect: (selected) =>
-          applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix, onClean }),
+          applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix, onClean, native }),
       });
       // "Clean" means every check passed on THIS run — whether that's the very
       // first run right after Update, or a later run after Correct fixed
@@ -1922,7 +2572,7 @@
   // Applies the fixes for just the checked failed items, writes the
   // corrected Summary/Details back to the live page, syncs summaryEl/detailsEl
   // to match, then immediately re-runs Sanity so the panel reflects the fix.
-  async function applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix, onClean }) {
+  async function applySanityCorrections({ project, summaryEl, detailsEl, outputEl, selected, customPrefix, onClean, native }) {
     const tab = await getTargetTab();
     if (!tab || !tab.id) throw new Error("No active browser tab found.");
 
@@ -1930,7 +2580,11 @@
     // anything. If the user clicks Correct again after a check has already
     // been resolved (by a prior Correct, or by anything else), this skips
     // reapplying its fix instead of blindly running it a second time.
-    const liveResults = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: sanityPageExtractor });
+    const liveResults = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: sanityPageExtractor,
+      args: [!!native],
+    });
     const liveData = liveResults && liveResults[0] ? liveResults[0].result : {};
     const freshChecks = await runSanityChecks({
       project,
@@ -1941,6 +2595,7 @@
       severityText: liveData.severity,
       checkpointText: liveData.checkpoint,
       customPrefix,
+      native,
     });
 
     let summaryText = summaryEl.value;
@@ -1976,20 +2631,20 @@
       console.log("Correct: skipped already-resolved check(s):", skipped.join(", "));
     }
 
-    await runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean });
+    await runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean, native });
   }
 
   // Kicks off the first Sanity run 1 second after a write (giving the page a
   // moment to settle), against whatever's currently in summaryEl.value/
   // detailsEl.value.
-  function scheduleSanityCheck({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean }) {
+  function scheduleSanityCheck({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean, native }) {
     outputEl.innerHTML = "";
     const waitingLine = document.createElement("div");
     waitingLine.className = "count-badge";
     waitingLine.textContent = "Performing sanity for this issue\u2026 (waiting for the page to update)";
     outputEl.appendChild(waitingLine);
     setTimeout(() => {
-      runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean });
+      runSanityCheckNow({ project, summaryEl, detailsEl, outputEl, customPrefix, onClean, native });
     }, 1000);
   }
 
@@ -2038,6 +2693,7 @@
   // Referenced by refreshUpdatedTitle/buildProjectRadios' onChange, which are
   // top-level functions rather than nested inside that tab's closure.
   let templateCustomPrefixManager = null;
+  let templateDescPanel = null; // optional Description panel on the Automation Template tab
 
   function customPrefixStorageKey(tabKey, project) {
     return `customPrefix:${tabKey}:${project}`;
@@ -2546,10 +3202,12 @@
     let summaryProject = "adobe"; // independent from the Automation Template tab's toggle
     let lastParsedContext = null; // result of parseContextFromDetails(), refreshed each Get Data
     let platformState = { value: "", locked: false }; // persisted via chrome.storage — sticky across issues
-    let nativeContextState = { locked: false, fields: {} }; // per-device-type, persisted via chrome.storage
+    let nativeContextState = { locked: false, text: "" }; // pasted Environment & Context block, per device type, persisted via chrome.storage
+    let currentTitleText = ""; // Summary title with any prefix/screen/elements wrapper removed (set by regenerate)
 
     const deviceTypeRow = buildDeviceTypeRow(() => {
       loadNativeContextState();
+      refreshDescPanelForDevice();
       refreshAllStatusChecks();
     });
     els.content.appendChild(deviceTypeRow);
@@ -2630,112 +3288,260 @@
     loadPlatformState();
 
     // ---- Native App Context panel (Android Native / iOS Native only) ----
+    // ONE pasted "Environment & Context" block per Device Type, locked until
+    // the user unlocks it (collapses once locked). Only its last
+    // "<Device> using ..." line is regenerated for each issue — everything else
+    // is used exactly as locked.
     const nativePanel = document.createElement("div");
     nativePanel.className = "errors-section";
     nativePanel.style.display = "none";
 
-    const nativeHeading = document.createElement("div");
-    nativeHeading.className = "errors-heading";
-    nativeHeading.textContent = "Native App Context (fill in once per device, then lock)";
-    nativePanel.appendChild(nativeHeading);
+    const nativeDetails = document.createElement("details");
+    nativeDetails.className = "native-context";
+    const nativeSummary = document.createElement("summary");
+    nativeDetails.appendChild(nativeSummary);
 
-    const NATIVE_FIELD_DEFS = [
-      { key: "testingApplication", label: "Testing Application", placeholder: "e.g. Adobe Lightroom" },
-      { key: "authState", label: "Authentication State", placeholder: "e.g. Logged out" },
-      { key: "device", label: "Device", placeholder: "e.g. iPhone 15" },
-      { key: "os", label: "Operating System", placeholder: "e.g. iOS" },
-      { key: "osVersion", label: "OS Version", placeholder: "e.g. 18.6.2" },
-      { key: "appVersion", label: "Application Version", placeholder: "e.g. 11.3.2" },
-      {
-        key: "toolDescription",
-        label: "Device/Tool description line",
-        placeholder: "e.g. Iphone using Adobe Lightroom application",
-      },
-    ];
-
-    const nativeInputs = {};
-    NATIVE_FIELD_DEFS.forEach((def) => {
-      const fieldRow = document.createElement("div");
-      fieldRow.className = "template-field";
-      const fieldLabel = document.createElement("label");
-      fieldLabel.textContent = def.label;
-      const fieldInput = document.createElement("input");
-      fieldInput.type = "text";
-      fieldInput.placeholder = def.placeholder;
-      fieldRow.appendChild(fieldLabel);
-      fieldRow.appendChild(fieldInput);
-      nativePanel.appendChild(fieldRow);
-      nativeInputs[def.key] = fieldInput;
-    });
+    const nativeInputWrap = document.createElement("div");
+    nativeInputWrap.className = "template-field";
+    const nativeInputLabel = document.createElement("label");
+    nativeInputLabel.setAttribute("for", "native-context-input");
+    nativeInputLabel.textContent = "Paste the block (its last \u201C\u2026 using \u2026\u201D line is generated per issue)";
+    const nativeInput = document.createElement("textarea");
+    nativeInput.id = "native-context-input";
+    nativeInput.spellcheck = false;
+    nativeInput.placeholder = [
+      "(Nothing pasted yet \u2014 paste your block here, then click Lock. Example:)",
+      "",
+      "Environment:",
+      "Testing Application: Adobe Premiere",
+      "Authentication State: Logged In",
+      "",
+      "Context:",
+      "Device: Galaxy S26",
+      "Operating System: Android",
+      "Android Version: 16",
+      "Adobe Premiere Version: 26.6.0",
+    ].join("\n");
+    nativeInputWrap.appendChild(nativeInputLabel);
+    nativeInputWrap.appendChild(nativeInput);
+    nativeDetails.appendChild(nativeInputWrap);
 
     const nativeLockRow = document.createElement("div");
-    nativeLockRow.className = "controls-row";
+    nativeLockRow.className = "native-actions";
     const nativeLockBtn = document.createElement("button");
     nativeLockBtn.className = "copy-btn";
     nativeLockBtn.type = "button";
     nativeLockRow.appendChild(nativeLockBtn);
-    nativePanel.appendChild(nativeLockRow);
+    nativeDetails.appendChild(nativeLockRow);
+    nativePanel.appendChild(nativeDetails);
+
+    const nativeContextWarn = document.createElement("div");
+    nativeContextWarn.className = "count-badge";
+    nativeContextWarn.setAttribute("role", "status");
+    nativePanel.appendChild(nativeContextWarn);
+
+    // Per-issue choice, so it stays outside the collapsible block.
+    const nativeToolRow = document.createElement("div");
+    nativeToolRow.className = "inline-row";
+    nativeToolRow.style.margin = "6px 0 0";
+    const nativeToolLabel = document.createElement("label");
+    nativeToolLabel.className = "aligned-label-col";
+    nativeToolLabel.setAttribute("for", "native-tool-select");
+    nativeToolLabel.textContent = "Tool line:";
+    const nativeToolSelect = document.createElement("select");
+    nativeToolSelect.id = "native-tool-select";
+    nativeToolSelect.className = "inline-select";
+    [
+      ["auto", "Auto-detect"],
+      ["app", "Application"],
+      ["screenReader", "Screen reader"],
+      ["contrast", "Color Contrast Analyzer"],
+    ].forEach(([value, text]) => {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = text;
+      nativeToolSelect.appendChild(opt);
+    });
+    nativeToolRow.appendChild(nativeToolLabel);
+    nativeToolRow.appendChild(nativeToolSelect);
+    nativePanel.appendChild(nativeToolRow);
 
     els.content.appendChild(nativePanel);
 
-    function applyNativeContextStateToUi() {
-      NATIVE_FIELD_DEFS.forEach((def) => {
-        nativeInputs[def.key].value = (nativeContextState.fields && nativeContextState.fields[def.key]) || "";
-        nativeInputs[def.key].disabled = !!nativeContextState.locked;
+    // Output preview — appended further down, next to the other outputs.
+    const nativeContextBlock = buildFieldBlock("Environment & Context (Native format)", "");
+    nativeContextBlock.style.display = "none";
+    const nativeContextTextarea = nativeContextBlock.querySelector("textarea");
+    nativeContextTextarea.style.minHeight = "190px"; // show the whole block without scrolling
+
+    // ---- Optional Description (shared panel; appended under Status & Checks) ----
+    // Checkbox state is remembered separately for Native and Web device types
+    // (Native defaults to on, Web to off).
+    const descPanel = buildDescriptionPanel({ getTitle: () => currentTitleText });
+    const descSection = descPanel.el;
+
+    function refreshDescPanelForDevice() {
+      const native = isNativeDeviceType(currentDeviceType);
+      descPanel.useStorageKey(`descEnabled:summaryUpdate:${native ? "native" : "web"}`, native);
+    }
+
+    function loadDescriptionFromPage() {
+      if (!lastExtracted) return;
+      const loc = locateDescriptionSection(lastExtracted.details);
+      descPanel.load({
+        pageDesc: String(lastExtracted.descText || "").replace(/\s+/g, " ").trim(),
+        existing: loc ? loc.content : "",
       });
-      nativeLockBtn.textContent = nativeContextState.locked ? "\uD83D\uDD12 Locked" : "\uD83D\uDD13 Lock";
+    }
+
+    function resetDescriptionPanel() {
+      descPanel.reset();
+    }
+
+    // ---- Locked context block ----
+    function getNativeTemplateText() {
+      return nativeContextState.locked ? nativeContextState.text || "" : nativeInput.value;
+    }
+
+    // Summary line of the collapsible block: lock state + the app it's for.
+    function refreshNativeSummary() {
+      const parsed = parseNativeContextTemplate(getNativeTemplateText());
+      const bits = ["Native App Context"];
+      if (parsed.appName) bits.push(parsed.appName);
+      bits.push(nativeContextState.locked ? "\uD83D\uDD12 locked" : parsed.lines.length ? "not locked" : "paste & lock");
+      nativeSummary.textContent = bits.join(" \u00B7 ");
+    }
+
+    function applyNativeContextStateToUi() {
+      nativeInput.value = nativeContextState.text || "";
+      nativeInput.readOnly = !!nativeContextState.locked; // readonly (not disabled) keeps it focusable/selectable
+      nativeInput.style.background = nativeContextState.locked ? "var(--bg)" : "";
+      nativeLockBtn.textContent = nativeContextState.locked ? "\uD83D\uDD12 Locked (click to edit)" : "\uD83D\uDD13 Lock";
+      nativeDetails.open = !nativeContextState.locked; // collapse once locked
+      refreshNativeContextWarning();
+    }
+
+    function refreshNativeContextWarning() {
+      refreshNativeSummary();
+      const parsed = parseNativeContextTemplate(getNativeTemplateText());
+      if (!parsed.lines.length) {
+        setStatus(nativeContextWarn, "Nothing pasted yet \u2014 paste the Environment & Context block, then click Lock.", true);
+        return;
+      }
+      const problems = [];
+      if (!parsed.hasEnvironment) problems.push("no Environment: heading");
+      if (!parsed.hasContext) problems.push("no Context: heading");
+      if (!parsed.appName) problems.push("no Testing Application: line (its value is used in the \u201Cusing the \u2026 application\u201D line)");
+      setStatus(nativeContextWarn, problems.length ? `Check the block \u2014 ${problems.join("; ")}.` : "", problems.length > 0);
     }
 
     async function loadNativeContextState() {
       const stored = await storageGet(nativeContextStorageKeyFor(currentDeviceType));
-      nativeContextState = stored || { locked: false, fields: {} };
+      if (stored && typeof stored.text === "string") {
+        nativeContextState = stored;
+      } else {
+        // Carry over a context locked in the old seven-field panel, if any.
+        const old = await storageGet(`nativeContext:${currentDeviceType}`);
+        const f = old && old.fields ? old.fields : null;
+        if (f && (f.testingApplication || f.device)) {
+          const text = [
+            "Environment:",
+            `Testing Application: ${f.testingApplication || ""}`,
+            `Authentication State: ${f.authState || ""}`,
+            "",
+            "Context:",
+            `Device: ${f.device || ""}`,
+            `Operating System: ${f.os || ""}`,
+            `${f.os || "OS"} Version: ${f.osVersion || ""}`,
+            `${f.testingApplication || "Application"} Version: ${f.appVersion || ""}`,
+          ].join("\n");
+          nativeContextState = { locked: !!old.locked, text };
+          await storageSet(nativeContextStorageKeyFor(currentDeviceType), nativeContextState);
+        } else {
+          nativeContextState = { locked: false, text: "" };
+        }
+      }
       applyNativeContextStateToUi();
       refreshNativeContextPreview();
     }
 
     nativeLockBtn.addEventListener("click", async () => {
       if (nativeContextState.locked) {
-        nativeContextState = { locked: false, fields: nativeContextState.fields || {} };
+        nativeContextState = { locked: false, text: nativeContextState.text || "" };
       } else {
-        const fields = {};
-        NATIVE_FIELD_DEFS.forEach((def) => {
-          fields[def.key] = nativeInputs[def.key].value.trim();
-        });
-        nativeContextState = { locked: true, fields };
+        nativeContextState = { locked: true, text: nativeInput.value.replace(/\s+$/, "") };
       }
       await storageSet(nativeContextStorageKeyFor(currentDeviceType), nativeContextState);
       applyNativeContextStateToUi();
       refreshNativeContextPreview();
     });
 
-    loadNativeContextState();
+    nativeInput.addEventListener("input", () => {
+      refreshNativeContextWarning();
+      refreshNativeContextPreview();
+    });
 
-    const nativeContextBlock = buildFieldBlock("Environment & Context (Native format)", "");
-    nativeContextBlock.style.display = "none";
-    els.content.appendChild(nativeContextBlock);
-    const nativeContextTextarea = nativeContextBlock.querySelector("textarea");
+    nativeToolSelect.addEventListener("change", refreshNativeContextPreview);
 
-    // Shows/hides the Native panel + preview based on the current Device Type,
-    // and (re)builds the preview text from the locked fields. The preview is
-    // editable directly, same pattern as the Yahoo Context preview — whatever
-    // is in it at Update time is what gets written back.
+    // Which "<Device> using ..." line this issue needs. "Auto-detect" uses the
+    // checkpoint (contrast SCs) and the issue wording; the dropdown overrides
+    // it. The Auto-detect option itself shows what was detected.
+    function resolveNativeVariant() {
+      const choice = nativeToolSelect.value;
+      let detected = null;
+      if (lastExtracted) {
+        detected = detectNativeToolVariant({
+          checkpoint: lastExtracted.checkpoint,
+          title: currentTitleText,
+          pageDesc: lastExtracted.descText,
+          details: lastExtracted.details,
+        });
+      }
+      nativeToolSelect.options[0].textContent = detected
+        ? `Auto-detect: ${NATIVE_TOOL_LABELS[detected]}`
+        : "Auto-detect (after Get Data)";
+      if (choice !== "auto") return choice;
+      return detected || "app";
+    }
+
+    // Shows/hides the Native panels based on the current Device Type and
+    // rebuilds the preview from the locked block + this issue's tool line. The
+    // preview stays editable — whatever is in it at Update time is written.
     function refreshNativeContextPreview() {
       const isNative = isNativeDeviceType(currentDeviceType);
       nativePanel.style.display = isNative ? "" : "none";
       nativeContextBlock.style.display = isNative ? "" : "none";
       if (!isNative) return;
-      nativeContextTextarea.value = buildNativeEnvironmentContextBlock(nativeContextState.fields || {});
+      nativeContextTextarea.value = buildNativeEnvironmentContextFromTemplate(
+        getNativeTemplateText(),
+        currentDeviceType,
+        resolveNativeVariant()
+      );
     }
 
-    // Builds the final Details text for Native device types by splicing the
-    // Native Context preview into the Environment/Context region, in place of
-    // buildFinalDetailsText()'s Web/Yahoo-only Context splice.
+    // The block to write: whatever is in the (editable) preview, or — if that
+    // is somehow empty — rebuilt straight from the pasted/locked text.
+    function currentNativeBlock() {
+      return (
+        nativeContextTextarea.value.trim() ||
+        buildNativeEnvironmentContextFromTemplate(getNativeTemplateText(), currentDeviceType, resolveNativeVariant())
+      );
+    }
+
+    // Final Details for Native device types: optional Description on top, the
+    // locked Environment/Context block, no Code Snippet, one blank line before
+    // every heading. Replaces the Web/Yahoo Context splice.
     function buildFinalDetailsTextNative() {
       if (!lastExtracted) return "";
-      const loc = locateEnvironmentContextSection(lastExtracted.details);
-      if (!loc) return lastExtracted.details;
-      return spliceEnvironmentContextIntoDetails(lastExtracted.details, loc, nativeContextTextarea.value);
+      return assembleNativeDetails({
+        details: lastExtracted.details,
+        envContextBlock: currentNativeBlock(),
+        description: descPanel.isEnabled() ? descPanel.getText() : null,
+      });
     }
+
+    loadNativeContextState();
+    refreshDescPanelForDevice();
 
     const actionRow = document.createElement("div");
     actionRow.className = "controls-row";
@@ -2795,9 +3601,11 @@
     errorsSection.appendChild(pageCheckMsg);
 
     els.content.appendChild(errorsSection);
+    els.content.appendChild(descSection);
 
     const resultBlock = buildFieldBlock("Updated Summary", "");
     els.content.appendChild(resultBlock);
+    els.content.appendChild(nativeContextBlock);
     const resultTextarea = resultBlock.querySelector("textarea");
 
     // ---- Context preview (Yahoo only) ----
@@ -2840,6 +3648,10 @@
     applyRow.appendChild(addAnotherLabel);
 
     els.content.appendChild(applyRow);
+    const applyMsg = document.createElement("div");
+    applyMsg.className = "count-badge";
+    applyMsg.setAttribute("role", "status");
+    els.content.appendChild(applyMsg);
 
     const sanitySection = document.createElement("div");
     sanitySection.className = "errors-section";
@@ -2916,6 +3728,7 @@
         setStatusEmpty(summaryDataCheckMsg);
       }
 
+      currentTitleText = modifiedTitle || "";
       const prefix = buildTitlePrefix(summaryProject, modifiedTitle, screenName, activeCustomPrefix);
       resultTextarea.value = `${prefix} (${expectedElementsSummary})`;
       checkPageMismatch(lastExtracted.pageField, screenName);
@@ -2997,6 +3810,11 @@
     // auto-insert fix on Update, and by the post-Update Sanity panel) so it's
     // visible right after Get Data, before Update is even clicked.
     function checkStepOneUrlLive(detailsText, checkpointText) {
+      // Native apps have no URL to open, so this check doesn't apply.
+      if (isNativeDeviceType(currentDeviceType)) {
+        setStatusEmpty(stepOneUrlCheckMsg);
+        return;
+      }
       const check = checkStepOneOpensUrl(detailsText, checkpointText);
       if (check.ok) {
         setStatusOk(stepOneUrlCheckMsg, "Steps to reproduce \u2014 Step 1: OK.");
@@ -3139,7 +3957,7 @@
           "Not auto-corrected \u2014 check which one is stale."
         );
       } else {
-        setStatusOk(pageCheckMsg, 6, `Screen Name: OK ("${screenName}").`);
+        setStatusOk(pageCheckMsg, `Screen Name: OK ("${screenName}").`);
       }
     }
 
@@ -3172,9 +3990,10 @@
 
         refreshAllStatusChecks();
         refreshNativeContextPreview();
+        loadDescriptionFromPage();
         setStatus(
           statusMsg,
-          "Pulled Summary and parsed Details. (Click Clear to re-capture the Summary from the page.)",
+          "Loaded Summary and Details. (Clear re-captures the Summary.)",
           false
         );
       } catch (err) {
@@ -3189,6 +4008,10 @@
       resultTextarea.value = "";
       contextTextarea.value = "";
       sanityOutput.innerHTML = "";
+      currentTitleText = "";
+      resetDescriptionPanel();
+      nativeToolSelect.value = "auto";
+      refreshNativeContextPreview();
       setStatus(statusMsg, "Cleared. Next Get Data will re-capture the Summary from the page.", false);
       setStatus(pageCheckMsg, "", false);
       setStatus(contextStatusMsg, "", false);
@@ -3210,6 +4033,20 @@
         setStatus(statusMsg, "Nothing to apply \u2014 click Get Data first.", true);
         return;
       }
+      const isNativeUpdate = isNativeDeviceType(currentDeviceType);
+      if (isNativeUpdate && !currentNativeBlock()) {
+        const m = "Can't update: the Native App Context box is empty. Paste the Environment & Context block into it and click Lock.";
+        setStatus(statusMsg, m, true);
+        setStatus(applyMsg, m, true);
+        return;
+      }
+      if (descPanel.isEnabled() && !descPanel.getText()) {
+        const m = "Can't update: Add a Description is ticked but the Description is empty. Use Suggest rewrite, type it, or untick the box.";
+        setStatus(statusMsg, m, true);
+        setStatus(applyMsg, m, true);
+        return;
+      }
+      setStatus(applyMsg, "", false);
       setStatus(statusMsg, "Updating\u2026", false);
       try {
         const tab = await getTargetTab();
@@ -3230,13 +4067,19 @@
           detailsToWrite = stripYahooContextArtifactsForAdobe(detailsToWrite);
         }
 
+        // Native already has the Description assembled in; Web gets it prepended here.
+        if (!isNativeUpdate && descPanel.isEnabled()) detailsToWrite = prependDescription(detailsToWrite, descPanel.getText());
+
         detailsToWrite = fixSingleQuotesInSteps(detailsToWrite);
 
         // If Step 1 doesn't have the required wording for this checkpoint/
         // issue type (Reflow/Resize -> browser-open step; AT -> turn on
         // screen reader + open URL; else -> open URL), insert the correct
         // one automatically, then renumber everything sequentially from 1.
-        const stepInsertion = autoInsertStepOneIfMissing(detailsToWrite, lastExtracted ? lastExtracted.checkpoint : "");
+        // Native apps have no URL, so Step 1 is never auto-inserted/replaced.
+        const stepInsertion = isNativeUpdate
+          ? { changed: false, text: detailsToWrite, issueType: null, stepText: null }
+          : autoInsertStepOneIfMissing(detailsToWrite, lastExtracted ? lastExtracted.checkpoint : "");
         detailsToWrite = stepInsertion.text;
 
         const stepsBefore = extractStepNumbers(detailsToWrite).join(",");
@@ -3268,6 +4111,10 @@
           );
         }
         if (remediationWasFixed) extras.push('Remediation Recommendation ":" corrected to ":-".');
+        if (descPanel.isEnabled()) extras.push("Description added above Environment.");
+        if (isNativeUpdate && lastExtracted && hasCodeSnippetSection(lastExtracted.details)) {
+          extras.push('"Code Snippet:" section removed.');
+        }
 
         setStatus(
           statusMsg,
@@ -3276,6 +4123,7 @@
           }${extras.length ? " " + extras.join(" ") : ""}`,
           !summaryOk || !detailsOk
         );
+        setStatus(applyMsg, summaryOk && detailsOk ? "Updated." : "Update did not fully apply \u2014 see Status & Checks.", !(summaryOk && detailsOk));
 
         if (summaryOk && detailsOk) {
           scheduleSanityCheck({
@@ -3284,6 +4132,7 @@
             detailsEl: { value: detailsToWrite },
             outputEl: sanityOutput,
             customPrefix: summaryCustomPrefixManager ? summaryCustomPrefixManager.getActivePrefix() : null,
+            native: isNativeUpdate,
             onClean: () => {
               if (!addAnotherCheckbox.checked) return;
               setStatus(statusMsg, "No sanity errors identified. Clearing for the next issue in 2 seconds\u2026", false);
@@ -3295,6 +4144,7 @@
         }
       } catch (err) {
         setStatus(statusMsg, "Error updating: " + err.message, true);
+        setStatus(applyMsg, "Error updating: " + err.message, true);
       }
     });
   }
@@ -3351,6 +4201,39 @@
     });
 
     els.content.appendChild(form);
+
+    // Optional Description (shared with the Summary Update tab). It is kept in
+    // sync with the output preview below, so Copy Output and Log Issue both
+    // include it when ticked.
+    let lastInsertedDesc = "";
+    function syncDescriptionIntoOutput() {
+      const out = document.getElementById("template-output");
+      if (!out) return;
+      const current = locateDescriptionSection(out.value);
+      let text = out.value;
+      // Remove a Description this panel put there (or replace it when ticked).
+      if (current && (current.content === lastInsertedDesc || templateDescPanel.isEnabled())) {
+        text = stripDescriptionSection(text);
+      }
+      if (templateDescPanel.isEnabled() && templateDescPanel.getText()) {
+        lastInsertedDesc = templateDescPanel.getText();
+        text = prependDescription(text, lastInsertedDesc);
+      } else {
+        lastInsertedDesc = "";
+      }
+      out.value = text;
+    }
+    templateDescPanel = buildDescriptionPanel({
+      getTitle: () => {
+        const t = form.querySelector('[data-key="updatedTitle"]');
+        return t && t.dataset.modifiedTitle ? t.dataset.modifiedTitle : "";
+      },
+      onChange: syncDescriptionIntoOutput,
+    });
+    templateDescPanel.syncOutput = syncDescriptionIntoOutput;
+    templateDescPanel.el.style.marginTop = "8px";
+    templateDescPanel.useStorageKey("descEnabled:template", false);
+    els.content.appendChild(templateDescPanel.el);
 
     const actions = document.createElement("div");
     actions.className = "template-actions";
@@ -3556,6 +4439,7 @@
         const problems = [];
 
         Object.keys(pageData).forEach((key) => {
+          if (key === "descText") return; // handled by the Description panel
           const targetKey = EXTRACTED_TO_TEMPLATE_MAP[key];
           const input = targetKey ? form.querySelector(`[data-key="${targetKey}"]`) : null;
           if (input) {
@@ -3629,6 +4513,10 @@
         const output = document.getElementById("template-output");
         if (output) output.value = buildTemplateText(collectFormValues(form));
 
+        // Optional Description: compare the page's desc-text with the modified
+        // title, then put it (if ticked) into the output preview.
+        if (templateDescPanel) templateDescPanel.load({ pageDesc: String(pageData.descText || "").replace(/\s+/g, " ").trim(), existing: "" });
+
         const missingAfterGetData = findMissingRequiredFields(form);
         setStatus(
           statusMsg,
@@ -3666,6 +4554,16 @@
         );
         return;
       }
+
+      if (templateDescPanel && templateDescPanel.isEnabled() && !templateDescPanel.getText()) {
+        setStatus(
+          statusMsg,
+          "\u26D4 Blocked \u2014 Add a Description is ticked but the Description is empty. Use Suggest rewrite, type it, or untick the box.",
+          true
+        );
+        return;
+      }
+      if (templateDescPanel && templateDescPanel.syncOutput) templateDescPanel.syncOutput();
 
       setStatus(statusMsg, "Logging issue\u2026", false);
       try {
@@ -3730,6 +4628,8 @@
         delete updatedTitleInput.dataset.modifiedTitle;
         delete updatedTitleInput.dataset.screenName;
       }
+
+      if (templateDescPanel) templateDescPanel.reset();
 
       const output = document.getElementById("template-output");
       if (output) output.value = buildTemplateText(collectFormValues(form));
